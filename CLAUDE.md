@@ -32,6 +32,34 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 | `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
 | `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
 
+## Custom Skills (ported from OpenClaw)
+
+Skills live in `container/skills/` and are synced into `/home/node/.claude/skills/` inside every container at startup. Adding or editing a skill file takes effect on the next container run — no rebuild needed.
+
+| Skill | Script | Notes |
+|-------|--------|-------|
+| `adhd-coach` | `scripts/adhd_coach.py` | State at `/workspace/group/adhd-coach-state.json`. Cron jobs for morning briefing (8am AEST weekdays), check-ins (45 min), end-of-day (3pm AEST weekdays). Calls groceries script at end-of-day. |
+| `google-calendar` | `scripts/gcal.py` | OAuth2 device flow. Token at `/workspace/group/.gcal-token.json`. Re-auth: run `python3 .../gcal.py auth` inside container. Needs `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. |
+| `groceries` | `scripts/groceries.py` | Simple list manager. No env vars needed. |
+| `brave-search` | none (curl) | Needs `BRAVE_API_KEY`. Uses Brave LLM Context API. |
+| `weather` | none (web_fetch) | No API key. Uses wttr.in + open-meteo. |
+| `motion` | `motion_cli.py` | **Blocked** — imports from external `motion-scheduler` project. See Motion section below. |
+
+### Env Vars Injected into Containers
+
+`src/container-runner.ts` explicitly injects these from `.env` (explicit allowlist, not full env):
+`MOTION_API_KEY`, `MOTION_WORKSPACE_ID`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `BRAVE_API_KEY`
+
+To add a new skill env var, add it to the `skillEnv` allowlist in `buildContainerArgs()`.
+
+### Motion Skill — Blocked
+
+`motion_cli.py` imports Python modules from a separate `motion-scheduler` project
+(expected at `/opt/motion-scheduler/motion/` in the container). Until that project is available:
+- The SKILL.md is installed and the skill description will load, but running the script will fail.
+- To fix: either mount the motion-scheduler project into the container via `additionalMounts`,
+  or rewrite `motion_cli.py` as a self-contained script using the Motion REST API directly.
+
 ## Development
 
 Run commands directly—don't tell the user to run them.
