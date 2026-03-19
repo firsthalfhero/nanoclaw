@@ -1,190 +1,198 @@
 #!/usr/bin/env python3
 """
-Motion CLI - Command-line interface for Motion task management
+Motion CLI - Self-contained command-line interface for Motion task management.
+Uses only Python stdlib (urllib) — no external dependencies.
+Requires: MOTION_API_KEY, MOTION_WORKSPACE_ID environment variables.
 """
 
+import json
 import os
 import sys
-import json
 import argparse
+import time
+import urllib.request
+import urllib.parse
+import urllib.error
 from datetime import datetime, timedelta
 
-# Import Motion modules from the mounted location (in container) or local (on host)
-motion_path = os.path.join('/opt', 'motion-scheduler', 'motion')
-if not os.path.exists(motion_path):
-    # Fallback to Windows path if running on host
-    motion_path = r'C:\Users\George\Documents\projects\motion-scheduler\motion'
-sys.path.insert(0, motion_path)
-
-try:
-    from motion_create import create_task, delete_task
-    from motion_search import search_tasks, display_tasks
-    from motion_config import API_BASE_URL, WORKSPACE_ID
-except ImportError as e:
-    print(f"Error importing Motion modules: {e}", file=sys.stderr)
-    print("Make sure the motion-scheduler project is available", file=sys.stderr)
-    sys.exit(1)
-
-# Import requests for list functionality
-import requests
-import time
+API_BASE_URL = "https://api.usemotion.com/v1"
 
 
-def request_with_retry(method, url, max_retries=4, base_delay=2.0, **kwargs):
-    """Make an HTTP request with exponential backoff on 429 rate limit responses."""
-    for attempt in range(max_retries):
-        time.sleep(1.0)  # Base rate limit delay between all requests
-        response = requests.request(method, url, **kwargs)
-        if response.status_code != 429:
-            response.raise_for_status()
-            return response
-        retry_after = response.headers.get('Retry-After')
-        wait = float(retry_after) if retry_after else base_delay * (2 ** attempt)
-        print(f"Rate limited. Waiting {wait:.0f}s before retry {attempt + 1}/{max_retries}...", file=sys.stderr)
-        time.sleep(wait)
-    # Final attempt
-    time.sleep(1.0)
-    response = requests.request(method, url, **kwargs)
-    response.raise_for_status()
-    return response
+# ---------------------------------------------------------------------------
+# HTTP helpers
+# ---------------------------------------------------------------------------
 
-
-def get_api_key():
-    """Get Motion API key from environment"""
-    api_key = os.getenv('MOTION_API_KEY')
-    if not api_key:
+def _get_api_key():
+    key = os.environ.get("MOTION_API_KEY")
+    if not key:
         print("Error: MOTION_API_KEY environment variable not set", file=sys.stderr)
         sys.exit(1)
-    return api_key
+    return key
 
 
-def get_workspace_id():
-    """Get Motion workspace ID from environment or config"""
-    return os.getenv('MOTION_WORKSPACE_ID', WORKSPACE_ID)
-
-
-def list_tasks(limit=10, workspace_id=None):
-    """List recent tasks from Motion"""
-    if not workspace_id:
-        workspace_id = get_workspace_id()
-
-    api_key = get_api_key()
-    url = f"{API_BASE_URL}/tasks"
-
-    headers = {
-        "X-API-Key": api_key,
-        "Content-Type": "application/json"
-    }
-
-    params = {
-        "workspaceId": workspace_id,
-    }
-
-    try:
-        response = request_with_retry('GET', url, headers=headers, params=params)
-        data = response.json()
-        tasks = data.get("tasks", [])[:limit]
-
-        # Output JSON for programmatic use
-        print(json.dumps(tasks, indent=2))
-        return tasks
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error listing tasks: {e}", file=sys.stderr)
-        if hasattr(e, 'response') and e.response is not None:
-            print(f"Response: {e.response.text}", file=sys.stderr)
+def _get_workspace_id():
+    wid = os.environ.get("MOTION_WORKSPACE_ID")
+    if not wid:
+        print("Error: MOTION_WORKSPACE_ID environment variable not set", file=sys.stderr)
         sys.exit(1)
+    return wid
+
+
+def _request(method, path, params=None, body=None, max_retries=4, base_delay=2.0):
+    """Make a Motion API request with exponential backoff on 429s."""
+    api_key = _get_api_key()
+    url = API_BASE_URL + path
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+
+    encoded_body = json.dumps(body).encode() if body is not None else None
+
+    for attempt in range(max_retries + 1):
+        time.sleep(1.0)  # base rate-limit courtesy delay
+        req = urllib.request.Request(url, data=encoded_body, method=method)
+        req.add_header("X-API-Key", api_key)
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Accept", "application/json")
+        req.add_header("User-Agent", "Mozilla/5.0 (compatible; nanoclaw/1.0)")
+
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read().decode()
+                return json.loads(raw) if raw.strip() else {}
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < max_retries:
+                retry_after = e.headers.get("Retry-After")
+                wait = float(retry_after) if retry_after else base_delay * (2 ** attempt)
+                print(f"Rate limited. Waiting {wait:.0f}s (attempt {attempt + 1}/{max_retries})...",
+                      file=sys.stderr)
+                time.sleep(wait)
+                continue
+            raw = e.read().decode()
+            try:
+                err = json.loads(raw)
+            except Exception:
+                err = {"raw": raw}
+            print(f"HTTP {e.code}: {json.dumps(err, indent=2)}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"Request error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+def cmd_list(args):
+    workspace_id = _get_workspace_id()
+    data = _request("GET", "/tasks", params={"workspaceId": workspace_id})
+    tasks = data.get("tasks", [])[:args.limit]
+    print(json.dumps(tasks, indent=2))
+    return 0 if tasks else 1
 
 
 def cmd_search(args):
-    """Search for tasks"""
-    workspace_id = get_workspace_id()
-    tasks = search_tasks(args.keyword, workspace_id=workspace_id)
-
-    if args.json:
-        print(json.dumps(tasks, indent=2))
-    else:
-        display_tasks(tasks)
-
+    workspace_id = _get_workspace_id()
+    data = _request("GET", "/tasks", params={"workspaceId": workspace_id})
+    keyword = args.keyword.lower()
+    tasks = [t for t in data.get("tasks", [])
+             if keyword in t.get("name", "").lower()
+             or keyword in t.get("description", "").lower()]
+    print(json.dumps(tasks, indent=2))
     return 0 if tasks else 1
 
 
 def cmd_create(args):
-    """Create a new task"""
-    workspace_id = get_workspace_id()
+    workspace_id = _get_workspace_id()
 
-    # Calculate due date if --due-days is provided
     due_date = None
     if args.due_days:
-        due_date = (datetime.now() + timedelta(days=args.due_days)).isoformat()
+        due_date = (datetime.now() + timedelta(days=args.due_days)).strftime("%Y-%m-%d")
 
-    # Parse labels
     labels = None
     if args.labels:
-        labels = [l.strip() for l in args.labels.split(',')]
+        labels = [l.strip() for l in args.labels.split(",")]
 
-    task = create_task(
-        name=args.name,
-        workspace_id=workspace_id,
-        description=args.description,
-        duration=args.duration,
-        priority=args.priority.upper(),
-        labels=labels,
-        due_date=due_date
-    )
+    body = {
+        "name": args.name,
+        "workspaceId": workspace_id,
+        "priority": args.priority.upper(),
+        "duration": args.duration,
+    }
+    if args.description:
+        body["description"] = args.description
+    if due_date:
+        body["dueDate"] = due_date
+    if labels:
+        body["labels"] = labels
 
-    if task and args.json:
-        print(json.dumps(task, indent=2))
-
+    task = _request("POST", "/tasks", body=body)
+    print(json.dumps(task, indent=2))
     return 0 if task else 1
 
 
-def cmd_list(args):
-    """List tasks"""
-    workspace_id = get_workspace_id()
-    tasks = list_tasks(limit=args.limit, workspace_id=workspace_id)
-    return 0 if tasks else 1
+def cmd_update(args):
+    update_data = {}
+
+    if args.start_date:
+        update_data["autoScheduled"] = {
+            "startDate": args.start_date,
+            "deadlineType": "SOFT",
+            "schedule": "Work Hours",
+        }
+    if args.priority:
+        update_data["priority"] = args.priority.upper()
+
+    if not update_data:
+        print("Error: no update fields provided", file=sys.stderr)
+        return 1
+
+    task = _request("PATCH", f"/tasks/{args.task_id}", body=update_data)
+    print(json.dumps(task, indent=2))
+    return 0
 
 
 def cmd_delete(args):
-    """Delete a task"""
-    success = delete_task(args.task_id)
-    return 0 if success else 1
+    _request("DELETE", f"/tasks/{args.task_id}")
+    print(f"Deleted task {args.task_id}")
+    return 0
 
 
 def cmd_bulk_update_start_date(args):
-    """Search for multiple tasks by name and set their start date in one pass."""
-    workspace_id = get_workspace_id()
-    api_key = get_api_key()
-    headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
+    workspace_id = _get_workspace_id()
     results = {"updated": [], "not_found": [], "failed": []}
 
     for name in args.names:
         name = name.strip()
         print(f"\n--- Processing: {name} ---", file=sys.stderr)
 
-        # Search
-        tasks = search_tasks(name, workspace_id=workspace_id)
-        if not tasks:
+        data = _request("GET", "/tasks", params={"workspaceId": workspace_id})
+        keyword = name.lower()
+        matches = [t for t in data.get("tasks", [])
+                   if keyword in t.get("name", "").lower()]
+
+        if not matches:
             print(f"  Not found: {name}", file=sys.stderr)
             results["not_found"].append(name)
             time.sleep(args.delay)
             continue
 
-        task = tasks[0]
-        task_id = task.get("id")
+        task_id = matches[0]["id"]
         print(f"  Found: {task_id}", file=sys.stderr)
 
-        # Update
         time.sleep(args.delay)
-        update_data = {"autoScheduled": {"startDate": args.start_date, "deadlineType": "SOFT", "schedule": "Work Hours"}}
+        update_data = {
+            "autoScheduled": {
+                "startDate": args.start_date,
+                "deadlineType": "SOFT",
+                "schedule": "Work Hours",
+            }
+        }
         try:
-            url = f"{API_BASE_URL}/tasks/{task_id}"
-            request_with_retry('PATCH', url, headers=headers, json=update_data)
+            _request("PATCH", f"/tasks/{task_id}", body=update_data)
             print(f"  Updated start date to {args.start_date}", file=sys.stderr)
             results["updated"].append(name)
-        except requests.exceptions.RequestException as e:
-            print(f"  Failed to update: {e}", file=sys.stderr)
+        except SystemExit:
             results["failed"].append(name)
 
         time.sleep(args.delay)
@@ -193,114 +201,46 @@ def cmd_bulk_update_start_date(args):
     return 0 if not results["failed"] else 1
 
 
-def cmd_update(args):
-    """Update a task's start date and/or priority"""
-    api_key = get_api_key()
-    url = f"{API_BASE_URL}/tasks/{args.task_id}"
-
-    headers = {
-        "X-API-Key": api_key,
-        "Content-Type": "application/json"
-    }
-
-    update_data = {}
-
-    if args.start_date:
-        update_data["autoScheduled"] = {
-            "startDate": args.start_date,
-            "deadlineType": "SOFT",
-            "schedule": "Work Hours"
-        }
-
-    if args.priority:
-        update_data["priority"] = args.priority.upper()
-
-    if not update_data:
-        print("Error: no update fields provided", file=sys.stderr)
-        return 1
-
-    try:
-        response = request_with_retry('PATCH', url, headers=headers, json=update_data)
-        task = response.json()
-        if args.json:
-            print(json.dumps(task, indent=2))
-        else:
-            print(f"Updated task: {task.get('name', args.task_id)}")
-        return 0
-    except requests.exceptions.RequestException as e:
-        print(f"Error updating task: {e}", file=sys.stderr)
-        if hasattr(e, 'response') and e.response is not None:
-            print(f"Response: {e.response.text}", file=sys.stderr)
-        return 1
-
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def main():
-    """Main CLI entry point"""
-    parser = argparse.ArgumentParser(
-        description='Motion CLI - Manage tasks in Motion',
-        formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    parser = argparse.ArgumentParser(description="Motion CLI — manage Motion tasks")
+    subparsers = parser.add_subparsers(dest="command")
 
-    parser.add_argument('--json', action='store_true',
-                       help='Output JSON format')
+    # list
+    p = subparsers.add_parser("list", help="List tasks")
+    p.add_argument("--limit", type=int, default=10)
 
-    subparsers = parser.add_subparsers(dest='command', help='Commands')
+    # search
+    p = subparsers.add_parser("search", help="Search tasks by keyword")
+    p.add_argument("keyword")
 
-    # Search command
-    search_parser = subparsers.add_parser('search',
-                                         help='Search for tasks')
-    search_parser.add_argument('keyword',
-                              help='Search keyword')
+    # create
+    p = subparsers.add_parser("create", help="Create a task")
+    p.add_argument("name")
+    p.add_argument("--description")
+    p.add_argument("--duration", type=int, default=30)
+    p.add_argument("--priority", default="MEDIUM", choices=["ASAP", "HIGH", "MEDIUM", "LOW"])
+    p.add_argument("--due-days", type=int)
+    p.add_argument("--labels")
 
-    # Create command
-    create_parser = subparsers.add_parser('create',
-                                         help='Create a new task')
-    create_parser.add_argument('name',
-                              help='Task name')
-    create_parser.add_argument('--description',
-                              help='Task description')
-    create_parser.add_argument('--duration', type=int, default=30,
-                              help='Duration in minutes (default: 30)')
-    create_parser.add_argument('--priority', default='MEDIUM',
-                              choices=['ASAP', 'HIGH', 'MEDIUM', 'LOW'],
-                              help='Task priority (default: MEDIUM)')
-    create_parser.add_argument('--due-days', type=int,
-                              help='Due in N days from now')
-    create_parser.add_argument('--labels',
-                              help='Comma-separated labels')
+    # update
+    p = subparsers.add_parser("update", help="Update a task")
+    p.add_argument("task_id")
+    p.add_argument("--start-date")
+    p.add_argument("--priority", choices=["ASAP", "HIGH", "MEDIUM", "LOW"])
 
-    # List command
-    list_parser = subparsers.add_parser('list',
-                                       help='List tasks')
-    list_parser.add_argument('--limit', type=int, default=10,
-                            help='Number of tasks to list (default: 10)')
+    # delete
+    p = subparsers.add_parser("delete", help="Delete a task")
+    p.add_argument("task_id")
 
-    # Delete command
-    delete_parser = subparsers.add_parser('delete',
-                                         help='Delete a task')
-    delete_parser.add_argument('task_id',
-                              help='Task ID to delete')
-
-    # Bulk update start date command
-    bulk_parser = subparsers.add_parser('bulk-update-start-date',
-                                        help='Set start date on multiple tasks by name (one API session)')
-    bulk_parser.add_argument('names', nargs='+',
-                             help='Task names to update (exact or partial match)')
-    bulk_parser.add_argument('--start-date', required=True,
-                             help='Start date (YYYY-MM-DD)')
-    bulk_parser.add_argument('--delay', type=float, default=3.0,
-                             help='Seconds to wait between tasks (default: 3)')
-
-    # Update command
-    update_parser = subparsers.add_parser('update',
-                                         help='Update a task (start date, priority)')
-    update_parser.add_argument('task_id',
-                              help='Task ID to update')
-    update_parser.add_argument('--start-date',
-                              help='Start date (YYYY-MM-DD) for auto-scheduling')
-    update_parser.add_argument('--priority',
-                              choices=['ASAP', 'HIGH', 'MEDIUM', 'LOW'],
-                              help='Task priority')
+    # bulk-update-start-date
+    p = subparsers.add_parser("bulk-update-start-date", help="Set start date on multiple tasks by name")
+    p.add_argument("names", nargs="+")
+    p.add_argument("--start-date", required=True)
+    p.add_argument("--delay", type=float, default=3.0)
 
     args = parser.parse_args()
 
@@ -308,23 +248,16 @@ def main():
         parser.print_help()
         return 1
 
-    # Route to command handlers
-    if args.command == 'search':
-        return cmd_search(args)
-    elif args.command == 'create':
-        return cmd_create(args)
-    elif args.command == 'list':
-        return cmd_list(args)
-    elif args.command == 'delete':
-        return cmd_delete(args)
-    elif args.command == 'update':
-        return cmd_update(args)
-    elif args.command == 'bulk-update-start-date':
-        return cmd_bulk_update_start_date(args)
-    else:
-        parser.print_help()
-        return 1
+    dispatch = {
+        "list": cmd_list,
+        "search": cmd_search,
+        "create": cmd_create,
+        "update": cmd_update,
+        "delete": cmd_delete,
+        "bulk-update-start-date": cmd_bulk_update_start_date,
+    }
+    return dispatch[args.command](args)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())
