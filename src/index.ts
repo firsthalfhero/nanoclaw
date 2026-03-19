@@ -52,6 +52,7 @@ import {
   getRegisteredGroup,
   getRouterState,
   initDatabase,
+  recordTokenUsage,
   setRegisteredGroup,
   setRouterState,
   setSession,
@@ -497,6 +498,12 @@ async function main(): Promise<void> {
   const proxyServer = await startCredentialProxy(
     CREDENTIAL_PROXY_PORT,
     PROXY_BIND_HOST,
+    (usage) => recordTokenUsage(
+      usage.input_tokens,
+      usage.output_tokens,
+      usage.cache_creation_tokens,
+      usage.cache_read_tokens,
+    ),
   );
 
   // Graceful shutdown handlers

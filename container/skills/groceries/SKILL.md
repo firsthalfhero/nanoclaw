@@ -9,7 +9,7 @@ metadata: { "openclaw": { "emoji": "🛒" } }
 Use the `groceries.py` script for ALL grocery operations. ALWAYS run the script — never make up data.
 
 Script location: `/home/node/.claude/skills/groceries/scripts/groceries.py`
-Fallback path: `/home/node/.claude/skills/groceries/scripts/groceries.py`
+Fallback path: `/home/node/.openclaw/custom-skills/groceries/scripts/groceries.py`
 
 Categories: `meat`, `fruit-veg`, `store`, `pantry`, `chemist`, `other`.
 

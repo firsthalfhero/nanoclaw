@@ -69,6 +69,15 @@ function createSchema(database: Database.Database): void {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS token_usage (
+      date TEXT NOT NULL,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      request_count INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (date)
+    );
     CREATE TABLE IF NOT EXISTS sessions (
       group_folder TEXT PRIMARY KEY,
       session_id TEXT NOT NULL
@@ -635,6 +644,42 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
 }
 
 // --- JSON migration ---
+
+export interface TokenUsageRow {
+  date: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+  request_count: number;
+}
+
+export function recordTokenUsage(
+  inputTokens: number,
+  outputTokens: number,
+  cacheCreationTokens: number,
+  cacheReadTokens: number,
+): void {
+  const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  db.prepare(`
+    INSERT INTO token_usage (date, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, request_count)
+    VALUES (?, ?, ?, ?, ?, 1)
+    ON CONFLICT(date) DO UPDATE SET
+      input_tokens = input_tokens + excluded.input_tokens,
+      output_tokens = output_tokens + excluded.output_tokens,
+      cache_creation_tokens = cache_creation_tokens + excluded.cache_creation_tokens,
+      cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
+      request_count = request_count + 1
+  `).run(date, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens);
+}
+
+export function getTokenUsage(days = 30): TokenUsageRow[] {
+  return db.prepare(`
+    SELECT * FROM token_usage
+    WHERE date >= date('now', ?)
+    ORDER BY date DESC
+  `).all(`-${days} days`) as TokenUsageRow[];
+}
 
 function migrateJsonState(): void {
   const migrateFile = (filename: string) => {

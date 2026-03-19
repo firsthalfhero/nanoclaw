@@ -31,7 +31,7 @@ metadata: { "openclaw": { "emoji": "🧠" } }
 Script location: `/home/node/.claude/skills/adhd-coach/scripts/adhd_coach.py`
 Fallback path: `/home/node/.claude/skills/adhd-coach/scripts/adhd_coach.py`
 
-State file: `/opt/state/adhd-coach.json`
+State file: `/workspace/group/adhd-coach-state.json`
 
 **ALWAYS run the script — never guess or make up task/session data.**
 
@@ -198,7 +198,7 @@ Then say: "Got them. Your next task is: [next-task output]"
 When the 3pm cron fires or the user asks for an end-of-day summary:
 
 1. Run `today-summary`
-2. Check grocery list: `python3 /home/node/.claude/skills/groceries/scripts/groceries.py list`
+2. Check grocery list: `python3 /home/node/.claude/skills/adhd-coach/../groceries/scripts/groceries.py list`
 3. Compose:
 
 ```

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Grocery list manager. Data stored at /opt/state/groceries.json."""
+"""Grocery list manager. Data stored at /workspace/group/groceries-state.json."""
 
 import json
 import os
@@ -7,7 +7,7 @@ import sys
 import tempfile
 from datetime import date
 
-DATA_FILE = os.environ.get("GROCERIES_STATE_FILE", "/workspace/group/groceries-state.json")
+DATA_FILE = "/workspace/group/groceries-state.json"
 CATEGORY_ORDER = ["meat", "fruit-veg", "store", "pantry", "chemist", "other"]
 CATEGORY_LABELS = {
     "meat": "Meat",

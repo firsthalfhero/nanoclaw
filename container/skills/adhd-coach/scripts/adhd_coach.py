@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ADHD Coach state manager. Data stored at /opt/state/adhd-coach.json."""
+"""ADHD Coach state manager. Data stored at /workspace/group/adhd-coach-state.json."""
 
 import json
 import os
@@ -12,7 +12,7 @@ from datetime import datetime, date, timezone
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-DATA_FILE = os.environ.get("ADHD_STATE_FILE", "/workspace/group/adhd-coach-state.json")
+DATA_FILE = "/workspace/group/adhd-coach-state.json"
 PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 
 

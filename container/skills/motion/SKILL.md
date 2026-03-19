@@ -10,7 +10,7 @@ description: >
   update them with today's date as the start-date.
 metadata:
   {
-    "openclaw":
+    "nanoclaw":
       {
         "emoji": "⚡",
         "requires": { "bins": ["python3"], "env": ["MOTION_API_KEY", "MOTION_WORKSPACE_ID"] },
@@ -25,7 +25,7 @@ Motion is the user's task management app. It auto-schedules tasks into their cal
 Always retrieve live data — never guess or make up task info.
 
 Script location: `/home/node/.claude/skills/motion/motion_cli.py`
-Fallback path: `/home/node/.claude/skills/motion/motion_cli.py`
+Fallback path: `/home/node/.claude/skills/motion/scripts/motion_cli.py`
 
 **ALWAYS run the script — never fabricate task data.**
 
