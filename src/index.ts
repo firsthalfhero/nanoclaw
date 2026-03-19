@@ -1,5 +1,21 @@
+import dns from 'dns';
 import fs from 'fs';
 import path from 'path';
+
+// Force IPv4-only DNS on systems where IPv6 routes are unavailable.
+// undici's happy eyeballs immediately rejects on ENETUNREACH (IPv6) without waiting for IPv4.
+const _lookup = dns.lookup.bind(dns);
+(dns as any).lookup = (
+  hostname: string,
+  options: any,
+  callback: (...args: any[]) => void,
+) => {
+  if (typeof options === 'function') {
+    callback = options;
+    options = {};
+  }
+  return _lookup(hostname, { ...options, family: 4 }, callback);
+};
 
 import {
   ASSISTANT_NAME,
