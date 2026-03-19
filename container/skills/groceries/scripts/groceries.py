@@ -7,7 +7,7 @@ import sys
 import tempfile
 from datetime import date
 
-DATA_FILE = "/opt/state/groceries.json"
+DATA_FILE = os.environ.get("GROCERIES_STATE_FILE", "/workspace/group/groceries-state.json")
 CATEGORY_ORDER = ["meat", "fruit-veg", "store", "pantry", "chemist", "other"]
 CATEGORY_LABELS = {
     "meat": "Meat",
