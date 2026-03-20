@@ -37,7 +37,10 @@ export type OnTokenUsage = (usage: TokenUsage) => void;
  * Handles both streaming (SSE) and non-streaming (JSON) responses.
  */
 function parseTokenUsage(body: string, contentType: string): TokenUsage | null {
-  let input = 0, output = 0, cacheCreate = 0, cacheRead = 0;
+  let input = 0,
+    output = 0,
+    cacheCreate = 0,
+    cacheRead = 0;
 
   if (contentType.includes('text/event-stream')) {
     // SSE: scan for message_start (input tokens) and message_delta (output tokens)
@@ -53,7 +56,9 @@ function parseTokenUsage(body: string, contentType: string): TokenUsage | null {
         if (ev.type === 'message_delta' && ev.usage) {
           output += ev.usage.output_tokens ?? 0;
         }
-      } catch { /* skip malformed lines */ }
+      } catch {
+        /* skip malformed lines */
+      }
     }
   } else {
     // Non-streaming JSON
@@ -65,11 +70,18 @@ function parseTokenUsage(body: string, contentType: string): TokenUsage | null {
         cacheCreate = json.usage.cache_creation_input_tokens ?? 0;
         cacheRead = json.usage.cache_read_input_tokens ?? 0;
       }
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   }
 
   if (input === 0 && output === 0) return null;
-  return { input_tokens: input, output_tokens: output, cache_creation_tokens: cacheCreate, cache_read_tokens: cacheRead };
+  return {
+    input_tokens: input,
+    output_tokens: output,
+    cache_creation_tokens: cacheCreate,
+    cache_read_tokens: cacheRead,
+  };
 }
 
 export function startCredentialProxy(
@@ -143,7 +155,11 @@ export function startCredentialProxy(
             res.writeHead(upRes.statusCode!, upRes.headers);
 
             // Tee: capture body for usage parsing while streaming to client
-            if (onTokenUsage && isMessagesEndpoint && upRes.statusCode === 200) {
+            if (
+              onTokenUsage &&
+              isMessagesEndpoint &&
+              upRes.statusCode === 200
+            ) {
               const contentType = String(upRes.headers['content-type'] || '');
               const chunks: Buffer[] = [];
               upRes.on('data', (chunk: Buffer) => {

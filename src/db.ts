@@ -661,7 +661,8 @@ export function recordTokenUsage(
   cacheReadTokens: number,
 ): void {
   const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO token_usage (date, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, request_count)
     VALUES (?, ?, ?, ?, ?, 1)
     ON CONFLICT(date) DO UPDATE SET
@@ -670,15 +671,20 @@ export function recordTokenUsage(
       cache_creation_tokens = cache_creation_tokens + excluded.cache_creation_tokens,
       cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
       request_count = request_count + 1
-  `).run(date, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens);
+  `,
+  ).run(date, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens);
 }
 
 export function getTokenUsage(days = 30): TokenUsageRow[] {
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT * FROM token_usage
     WHERE date >= date('now', ?)
     ORDER BY date DESC
-  `).all(`-${days} days`) as TokenUsageRow[];
+  `,
+    )
+    .all(`-${days} days`) as TokenUsageRow[];
 }
 
 function migrateJsonState(): void {
