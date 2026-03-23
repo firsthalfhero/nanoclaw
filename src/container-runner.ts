@@ -246,6 +246,8 @@ function buildContainerArgs(
     'GOOGLE_CLIENT_ID',
     'GOOGLE_CLIENT_SECRET',
     'BRAVE_API_KEY',
+    // Mobility Tracker (Firebase service account JSON)
+    'FIREBASE_SERVICE_ACCOUNT',
   ]);
   for (const [key, value] of Object.entries(skillEnv)) {
     args.push('-e', `${key}=${value}`);

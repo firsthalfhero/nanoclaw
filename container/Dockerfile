@@ -31,6 +31,9 @@ RUN apt-get update && apt-get install -y \
 # Make python3 available as 'python3' (already is on Debian, but be explicit)
 RUN python3 --version
 
+# Install Python packages for skills
+RUN pip3 install --break-system-packages firebase-admin
+
 # Set Chromium path for agent-browser
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
