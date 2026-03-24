@@ -1,4 +1,3 @@
-import https from 'https';
 import { Api, Bot } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
@@ -54,11 +53,7 @@ export class TelegramChannel implements Channel {
   }
 
   async connect(): Promise<void> {
-    this.bot = new Bot(this.botToken, {
-      client: {
-        baseFetchConfig: { agent: https.globalAgent, compress: true },
-      },
-    });
+    this.bot = new Bot(this.botToken);
 
     // Command to get chat ID (useful for registration)
     this.bot.command('chatid', (ctx) => {
@@ -80,9 +75,15 @@ export class TelegramChannel implements Channel {
       ctx.reply(`${ASSISTANT_NAME} is online.`);
     });
 
+    // Telegram bot commands handled above — skip them in the general handler
+    // so they don't also get stored as messages. All other /commands flow through.
+    const TELEGRAM_BOT_COMMANDS = new Set(['chatid', 'ping']);
+
     this.bot.on('message:text', async (ctx) => {
-      // Skip commands
-      if (ctx.message.text.startsWith('/')) return;
+      if (ctx.message.text.startsWith('/')) {
+        const cmd = ctx.message.text.slice(1).split(/[\s@]/)[0].toLowerCase();
+        if (TELEGRAM_BOT_COMMANDS.has(cmd)) return;
+      }
 
       const chatJid = `tg:${ctx.chat.id}`;
       let content = ctx.message.text;

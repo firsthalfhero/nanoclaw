@@ -18,6 +18,7 @@ import {
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
+import { readEnvFile } from './env.js';
 import {
   CONTAINER_HOST_GATEWAY,
   CONTAINER_RUNTIME_BIN,
@@ -237,6 +238,20 @@ function buildContainerArgs(
     args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
   } else {
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+  }
+
+  // Inject custom skill env vars from .env (safe: explicit allowlist, not the full env)
+  const skillEnv = readEnvFile([
+    'MOTION_API_KEY',
+    'MOTION_WORKSPACE_ID',
+    'GOOGLE_CLIENT_ID',
+    'GOOGLE_CLIENT_SECRET',
+    'BRAVE_API_KEY',
+    // Mobility Tracker (Firebase service account JSON)
+    'FIREBASE_SERVICE_ACCOUNT',
+  ]);
+  for (const [key, value] of Object.entries(skillEnv)) {
+    args.push('-e', `${key}=${value}`);
   }
 
   // Runtime-specific args for host gateway resolution
