@@ -23,9 +23,71 @@ export interface ProxyConfig {
   authMode: AuthMode;
 }
 
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+}
+
+export type OnTokenUsage = (usage: TokenUsage) => void;
+
+/**
+ * Parse token usage from a buffered Anthropic API response body.
+ * Handles both streaming (SSE) and non-streaming (JSON) responses.
+ */
+function parseTokenUsage(body: string, contentType: string): TokenUsage | null {
+  let input = 0,
+    output = 0,
+    cacheCreate = 0,
+    cacheRead = 0;
+
+  if (contentType.includes('text/event-stream')) {
+    // SSE: scan for message_start (input tokens) and message_delta (output tokens)
+    for (const line of body.split('\n')) {
+      if (!line.startsWith('data: ')) continue;
+      try {
+        const ev = JSON.parse(line.slice(6));
+        if (ev.type === 'message_start' && ev.message?.usage) {
+          input += ev.message.usage.input_tokens ?? 0;
+          cacheCreate += ev.message.usage.cache_creation_input_tokens ?? 0;
+          cacheRead += ev.message.usage.cache_read_input_tokens ?? 0;
+        }
+        if (ev.type === 'message_delta' && ev.usage) {
+          output += ev.usage.output_tokens ?? 0;
+        }
+      } catch {
+        /* skip malformed lines */
+      }
+    }
+  } else {
+    // Non-streaming JSON
+    try {
+      const json = JSON.parse(body);
+      if (json.usage) {
+        input = json.usage.input_tokens ?? 0;
+        output = json.usage.output_tokens ?? 0;
+        cacheCreate = json.usage.cache_creation_input_tokens ?? 0;
+        cacheRead = json.usage.cache_read_input_tokens ?? 0;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  if (input === 0 && output === 0) return null;
+  return {
+    input_tokens: input,
+    output_tokens: output,
+    cache_creation_tokens: cacheCreate,
+    cache_read_tokens: cacheRead,
+  };
+}
+
 export function startCredentialProxy(
   port: number,
   host = '127.0.0.1',
+  onTokenUsage?: OnTokenUsage,
 ): Promise<Server> {
   const secrets = readEnvFile([
     'ANTHROPIC_API_KEY',
@@ -79,6 +141,8 @@ export function startCredentialProxy(
           }
         }
 
+        const isMessagesEndpoint = req.url?.includes('/v1/messages');
+
         const upstream = makeRequest(
           {
             hostname: upstreamUrl.hostname,
@@ -89,7 +153,28 @@ export function startCredentialProxy(
           } as RequestOptions,
           (upRes) => {
             res.writeHead(upRes.statusCode!, upRes.headers);
-            upRes.pipe(res);
+
+            // Tee: capture body for usage parsing while streaming to client
+            if (
+              onTokenUsage &&
+              isMessagesEndpoint &&
+              upRes.statusCode === 200
+            ) {
+              const contentType = String(upRes.headers['content-type'] || '');
+              const chunks: Buffer[] = [];
+              upRes.on('data', (chunk: Buffer) => {
+                chunks.push(chunk);
+                res.write(chunk);
+              });
+              upRes.on('end', () => {
+                res.end();
+                const bodyText = Buffer.concat(chunks).toString('utf-8');
+                const usage = parseTokenUsage(bodyText, contentType);
+                if (usage) onTokenUsage(usage);
+              });
+            } else {
+              upRes.pipe(res);
+            }
           },
         );
 

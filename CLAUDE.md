@@ -32,30 +32,75 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 | `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
 | `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
 
+## Custom Skills (ported from OpenClaw)
+
+Skills live in `container/skills/` and are synced into `/home/node/.claude/skills/` inside every container at startup. Adding or editing a skill file takes effect on the next container run — no rebuild needed.
+
+| Skill | Script | Notes |
+|-------|--------|-------|
+| `adhd-coach` | `scripts/adhd_coach.py` | State at `/workspace/group/adhd-coach-state.json`. Cron jobs for morning briefing (8am AEST weekdays), check-ins (45 min), end-of-day (3pm AEST weekdays). Calls groceries script at end-of-day. |
+| `google-calendar` | `scripts/gcal.py` | OAuth2 device flow. Token at `/workspace/group/.gcal-token.json`. Re-auth: run `python3 .../gcal.py auth` inside container. Needs `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`. |
+| `groceries` | `scripts/groceries.py` | Simple list manager. No env vars needed. |
+| `brave-search` | none (curl) | Needs `BRAVE_API_KEY`. Uses Brave LLM Context API. |
+| `weather` | none (web_fetch) | No API key. Uses wttr.in + open-meteo. |
+| `motion` | `motion_cli.py` | Self-contained stdlib script. Needs `MOTION_API_KEY` + `MOTION_WORKSPACE_ID`. |
+| `paper-trader` | `scripts/portfolio_cli.py` | Reads paper trading state from host disk. Requires `additionalMounts` on the group (see Paper Trader section). |
+
+### Env Vars Injected into Containers
+
+`src/container-runner.ts` explicitly injects these from `.env` (explicit allowlist, not full env):
+`MOTION_API_KEY`, `MOTION_WORKSPACE_ID`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `BRAVE_API_KEY`
+
+To add a new skill env var, add it to the `skillEnv` allowlist in `buildContainerArgs()`.
+
+### Motion Skill
+
+`motion_cli.py` has been rewritten as a self-contained stdlib script using the Motion REST API directly (no external imports). Needs `MOTION_API_KEY` + `MOTION_WORKSPACE_ID` in `.env`.
+
+### Paper Trader Skill
+
+Reads live state from the mean reversion paper trading engine. Data is mounted read-only into the container via `additionalMounts` on the main group. The host path `C:\Users\George\Documents\projects\mean-reversion-strategy-sandbox\data` is mounted to `/workspace/extra/paper-trader/` in the container. Script reads `/workspace/extra/paper-trader/paper_state.json`.
+
 ## Development
 
 Run commands directly—don't tell the user to run them.
 
 ```bash
-npm run dev          # Run with hot reload
+npm run dev          # Run with hot reload (dev only — not suitable for persistent use on Windows)
 npm run build        # Compile TypeScript
-./container/build.sh # Rebuild agent container
+./container/build.sh # Rebuild agent container (run from Git Bash, not PowerShell)
+docker build -t nanoclaw-agent:latest container/  # Windows alternative to build.sh
 ```
 
-Service management:
-```bash
-# macOS (launchd)
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # restart
+## Running on Windows
 
-# Linux (systemd)
-systemctl --user start nanoclaw
-systemctl --user stop nanoclaw
-systemctl --user restart nanoclaw
+PM2 does not work reliably on Windows with this project (pino-pretty worker thread conflicts, CWD issues). Use `start.ps1` instead:
+
+```powershell
+# Start (builds first, kills any existing instance, writes logs)
+.\start.ps1
+
+# Check if running
+Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue
+
+# Tail logs
+Get-Content logs\nanoclaw-out.log -Wait
+
+# Stop
+Stop-Process -Id <PID> -Force
 ```
+
+Logs are written to `logs/nanoclaw-out.log` and `logs/nanoclaw-err.log`.
+
+The agent container is **ephemeral** — it spins up per conversation and disappears when done (`docker run --rm`). It will not appear as a persistent container in Docker Desktop. Only the Node.js host process (port 3001) is persistent.
 
 ## Troubleshooting
+
+**Multiple orphaned containers:** If NanoClaw crashes and restarts repeatedly, previous containers may keep running (holding resources). Check with `docker ps --filter "name=nanoclaw"` and kill with `docker kill <name>`. NanoClaw kills orphans automatically on startup.
+
+**Port 3001 EADDRINUSE:** A previous NanoClaw instance is still running. Find it with `Get-NetTCPConnection -LocalPort 3001` and stop it with `Stop-Process -Id <PID> -Force`. Running `.\start.ps1` handles this automatically.
+
+**IPv4/IPv6 on Windows:** NanoClaw patches `dns.setDefaultResultOrder('ipv4first')` at startup to prevent undici happy-eyeballs failures (IPv6 ENETUNREACH on this network).
 
 **WhatsApp not connecting after upgrade:** WhatsApp is now a separate channel fork, not bundled in core. Run `/add-whatsapp` (or `git remote add whatsapp https://github.com/qwibitai/nanoclaw-whatsapp.git && git fetch whatsapp main && (git merge whatsapp/main || { git checkout --theirs package-lock.json && git add package-lock.json && git merge --continue; }) && npm run build`) to install it. Existing auth credentials and groups are preserved.
 

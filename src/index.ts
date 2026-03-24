@@ -1,5 +1,21 @@
+import dns from 'dns';
 import fs from 'fs';
 import path from 'path';
+
+// Force IPv4-only DNS on systems where IPv6 routes are unavailable.
+// undici's happy eyeballs immediately rejects on ENETUNREACH (IPv6) without waiting for IPv4.
+const _lookup = dns.lookup.bind(dns);
+(dns as any).lookup = (
+  hostname: string,
+  options: any,
+  callback: (...args: any[]) => void,
+) => {
+  if (typeof options === 'function') {
+    callback = options;
+    options = {};
+  }
+  return _lookup(hostname, { ...options, family: 4 }, callback);
+};
 
 import {
   ASSISTANT_NAME,
@@ -36,6 +52,7 @@ import {
   getRegisteredGroup,
   getRouterState,
   initDatabase,
+  recordTokenUsage,
   setRegisteredGroup,
   setRouterState,
   setSession,
@@ -239,6 +256,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   };
 
   await channel.setTyping?.(chatJid, true);
+  await channel.sendMessage(chatJid, 'Got it, on it...');
   let hadError = false;
   let outputSentToUser = false;
 
@@ -533,6 +551,13 @@ async function main(): Promise<void> {
   const proxyServer = await startCredentialProxy(
     CREDENTIAL_PROXY_PORT,
     PROXY_BIND_HOST,
+    (usage) =>
+      recordTokenUsage(
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.cache_creation_tokens,
+        usage.cache_read_tokens,
+      ),
   );
 
   // Graceful shutdown handlers
@@ -684,6 +709,21 @@ async function main(): Promise<void> {
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
+    onTasksChanged: () => {
+      const tasks = getAllTasks();
+      const taskRows = tasks.map((t) => ({
+        id: t.id,
+        groupFolder: t.group_folder,
+        prompt: t.prompt,
+        schedule_type: t.schedule_type,
+        schedule_value: t.schedule_value,
+        status: t.status,
+        next_run: t.next_run,
+      }));
+      for (const group of Object.values(registeredGroups)) {
+        writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
+      }
+    },
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
