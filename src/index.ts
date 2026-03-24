@@ -226,8 +226,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   };
 
   await channel.setTyping?.(chatJid, true);
+  await channel.sendMessage(chatJid, 'Got it, on it...');
   let hadError = false;
-  let outputSentToUser = false;
+  let outputSentToUser = true; // ack already sent
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
