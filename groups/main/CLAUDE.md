@@ -244,3 +244,8 @@ When scheduling tasks for other groups, use the `target_group_jid` parameter wit
 - `schedule_task(prompt: "...", schedule_type: "cron", schedule_value: "0 9 * * 1", target_group_jid: "120363336345536173@g.us")`
 
 The task will run in that group's context with access to their files and memory.
+
+## Mobility Tracker
+
+Default user ID: `ObfbcWve9MOILcQUHeGoAQpHDlu1` (george.cains@gmail.com)
+This is already set as the default in the mobility_cli.py script.
