@@ -9,11 +9,15 @@ $watchdogLog = "$root\logs\nanoclaw-watchdog.log"
 # Ensure logs dir exists
 New-Item -ItemType Directory -Force -Path "$root\logs" | Out-Null
 
-# If NanoClaw is already running on port 3001, exit silently (handles session-unlock re-trigger)
-$alreadyRunning = Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue
-if ($alreadyRunning) {
-    exit 0
+# Use a lock file to prevent multiple watchdog instances (port check has race condition)
+$lockFile = "$root\logs\watchdog.lock"
+if (Test-Path $lockFile) {
+    $lockPid = Get-Content $lockFile -ErrorAction SilentlyContinue
+    if ($lockPid -and (Get-Process -Id $lockPid -ErrorAction SilentlyContinue)) {
+        exit 0  # Another watchdog is running
+    }
 }
+$PID | Out-File $lockFile -Force
 
 # Kill any existing NanoClaw process holding port 3001
 $existing = Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess
