@@ -96,16 +96,29 @@ curl -s http://host.docker.internal:8400/api/v1/members
 
 ### Upload a bank statement CSV
 
-When the user sends a CSV file (Macquarie bank export) or asks to upload one, POST it to:
+**Important:** Telegram does not download file attachments into the container.
+Do NOT tell the user to drop files in the workspace folder — that doesn't work.
 
+There are two ways to upload a CSV:
+
+*Option 1 — Drop folder (easiest):*
+Tell the user to drop the CSV file into this folder on their Windows desktop:
+```
+C:\Users\George\Documents\projects\subscription-reconciler\uploads\
+```
+The reconciler watches this folder every 30 seconds and auto-imports any CSV files it finds. Processed files are moved to `uploads\processed\` automatically.
+
+*Option 2 — Dashboard:*
+Open `http://localhost:8401` in a browser and use the file uploader in the left sidebar.
+
+After either method, check the result:
 ```bash
-curl -s -X POST http://host.docker.internal:8400/api/v1/upload/csv \
-  -F "file=@/path/to/statement.csv"
+curl -s http://host.docker.internal:8400/api/v1/reports/summary
 ```
 
-Reply with:
+When the user says they've uploaded/dropped a file, wait a moment then fetch the summary and report:
 ```
-✅ Bank statement processed.
+✅ Bank statement imported.
 
 📥 {rows_inserted} transactions imported ({rows_skipped_duplicate} duplicates skipped)
 ⚠️ {new_unmatched} unmatched charges need attention
