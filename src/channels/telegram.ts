@@ -52,7 +52,7 @@ async function transcribeWithGemini(
     const base64Audio = fileBuffer.toString('base64');
     const ext = path.extname(filePath).slice(1).toLowerCase();
     const mimeType =
-      ext === 'ogg' ? 'audio/ogg' : ext === 'mp3' ? 'audio/mpeg' : 'audio/wav';
+      ext === 'ogg' ? 'audio/opus' : ext === 'mp3' ? 'audio/mpeg' : 'audio/wav';
 
     const body = {
       contents: [
