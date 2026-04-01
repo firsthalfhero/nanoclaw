@@ -63,6 +63,7 @@ import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
+import { readEnvFile } from './env.js';
 import {
   restoreRemoteControl,
   startRemoteControl,
@@ -165,6 +166,40 @@ export function _setRegisteredGroups(
  * Process all pending messages for a group.
  * Called by the GroupQueue when it's this group's turn.
  */
+async function fallbackToGemini(prompt: string): Promise<string | null> {
+  try {
+    const envVars = readEnvFile(['GOOGLE_GEMINI_API_KEY']);
+    const geminiKey =
+      process.env.GOOGLE_GEMINI_API_KEY || envVars.GOOGLE_GEMINI_API_KEY;
+    if (!geminiKey) return null;
+
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+        }),
+      },
+    );
+
+    if (!res.ok) {
+      logger.warn({ status: res.status }, 'Gemini fallback API error');
+      return null;
+    }
+
+    const json = (await res.json()) as any;
+    const text = (
+      json?.candidates?.[0]?.content?.parts?.[0]?.text as string | undefined
+    )?.trim();
+    return text || null;
+  } catch (err) {
+    logger.warn({ err }, 'Gemini fallback failed');
+    return null;
+  }
+}
+
 async function processGroupMessages(chatJid: string): Promise<boolean> {
   const group = registeredGroups[chatJid];
   if (!group) return true;
@@ -270,6 +305,22 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       );
       return true;
     }
+
+    // Claude is down — attempt Gemini fallback before giving up
+    logger.warn(
+      { group: group.name },
+      'Claude agent failed, attempting Gemini fallback',
+    );
+    const geminiResponse = await fallbackToGemini(prompt);
+    if (geminiResponse) {
+      logger.info({ group: group.name }, 'Gemini fallback succeeded');
+      await channel.sendMessage(
+        chatJid,
+        `_(Claude is unavailable — responding via Gemini)_\n\n${geminiResponse}`,
+      );
+      return true;
+    }
+
     // Roll back cursor so retries can re-process these messages
     lastAgentTimestamp[chatJid] = previousCursor;
     saveState();

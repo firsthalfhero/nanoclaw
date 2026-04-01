@@ -49,11 +49,11 @@ When you learn something important:
 
 ## Media Attachments
 
-When a message contains `[Photo: /workspace/group/media/<filename>]`, the image is embedded directly and you can see it above.
+Images are embedded directly as vision content — you can see them.
 
-Voice and audio messages are automatically transcribed before reaching you and appear as `[Voice transcription: ...]` or `[Audio transcription: ...]`. Respond to the transcribed content as if the user typed it.
+Voice and audio messages are automatically transcribed by Gemini before reaching you. They arrive as `[Voice transcription: ...]` or `[Audio transcription: ...]`. Respond to the content as if the user typed it.
 
-If transcription failed and you see `[Voice: /workspace/group/media/<filename>]`, you can attempt manual transcription using `GOOGLE_GEMINI_API_KEY` if available:
+If transcription failed and you see `[Voice: /workspace/group/media/<filename>]`, attempt manual transcription using `GOOGLE_GEMINI_API_KEY` if available:
 
 ```bash
 # Read file and transcribe via Gemini

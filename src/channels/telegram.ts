@@ -43,25 +43,37 @@ async function sendTelegramMessage(
   }
 }
 
-async function transcribeWithGemini(filePath: string, apiKey: string): Promise<string | null> {
+async function transcribeWithGemini(
+  filePath: string,
+  apiKey: string,
+): Promise<string | null> {
   try {
     const fileBuffer = fs.readFileSync(filePath);
     const base64Audio = fileBuffer.toString('base64');
     const ext = path.extname(filePath).slice(1).toLowerCase();
-    const mimeType = ext === 'ogg' ? 'audio/ogg' : ext === 'mp3' ? 'audio/mpeg' : 'audio/wav';
+    const mimeType =
+      ext === 'ogg' ? 'audio/ogg' : ext === 'mp3' ? 'audio/mpeg' : 'audio/wav';
 
     const body = {
-      contents: [{
-        parts: [
-          { text: 'Transcribe this audio message exactly as spoken. Return only the transcription, no commentary.' },
-          { inline_data: { mime_type: mimeType, data: base64Audio } },
-        ],
-      }],
+      contents: [
+        {
+          parts: [
+            {
+              text: 'Transcribe this audio message exactly as spoken. Return only the transcription, no commentary.',
+            },
+            { inline_data: { mime_type: mimeType, data: base64Audio } },
+          ],
+        },
+      ],
     };
 
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      },
     );
 
     if (!res.ok) {
@@ -69,8 +81,10 @@ async function transcribeWithGemini(filePath: string, apiKey: string): Promise<s
       return null;
     }
 
-    const json = await res.json() as any;
-    const text = (json?.candidates?.[0]?.content?.parts?.[0]?.text as string | undefined)?.trim();
+    const json = (await res.json()) as any;
+    const text = (
+      json?.candidates?.[0]?.content?.parts?.[0]?.text as string | undefined
+    )?.trim();
     return text || null;
   } catch (err) {
     logger.warn({ err }, 'transcribeWithGemini failed');
@@ -282,7 +296,8 @@ export class TelegramChannel implements Channel {
         const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
 
         const envVars = readEnvFile(['GOOGLE_GEMINI_API_KEY']);
-        const geminiKey = process.env.GOOGLE_GEMINI_API_KEY || envVars.GOOGLE_GEMINI_API_KEY;
+        const geminiKey =
+          process.env.GOOGLE_GEMINI_API_KEY || envVars.GOOGLE_GEMINI_API_KEY;
         if (geminiKey) {
           const transcript = await transcribeWithGemini(dest, geminiKey);
           if (transcript) {
@@ -321,7 +336,8 @@ export class TelegramChannel implements Channel {
 
         const containerPath = `/workspace/group/media/${fname}`;
         const envVars = readEnvFile(['GOOGLE_GEMINI_API_KEY']);
-        const geminiKey = process.env.GOOGLE_GEMINI_API_KEY || envVars.GOOGLE_GEMINI_API_KEY;
+        const geminiKey =
+          process.env.GOOGLE_GEMINI_API_KEY || envVars.GOOGLE_GEMINI_API_KEY;
         if (geminiKey) {
           const transcript = await transcribeWithGemini(dest, geminiKey);
           if (transcript) {
