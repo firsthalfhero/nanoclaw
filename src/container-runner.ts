@@ -250,6 +250,8 @@ function buildContainerArgs(
     'FIREBASE_SERVICE_ACCOUNT',
     // Voice transcription via OpenAI Whisper
     'OPENAI_API_KEY',
+    // Voice/audio transcription via Google Gemini
+    'GOOGLE_GEMINI_API_KEY',
   ]);
   for (const [key, value] of Object.entries(skillEnv)) {
     args.push('-e', `${key}=${value}`);

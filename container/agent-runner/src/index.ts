@@ -47,9 +47,21 @@ interface SessionsIndex {
   entries: SessionEntry[];
 }
 
+type ImageContentBlock = {
+  type: 'image';
+  source: { type: 'base64'; media_type: string; data: string };
+};
+
+type TextContentBlock = {
+  type: 'text';
+  text: string;
+};
+
+type ContentBlock = TextContentBlock | ImageContentBlock;
+
 interface SDKUserMessage {
   type: 'user';
-  message: { role: 'user'; content: string };
+  message: { role: 'user'; content: string | ContentBlock[] };
   parent_tool_use_id: null;
   session_id: string;
 }
@@ -67,10 +79,10 @@ class MessageStream {
   private waiting: (() => void) | null = null;
   private done = false;
 
-  push(text: string): void {
+  push(content: string | ContentBlock[]): void {
     this.queue.push({
       type: 'user',
-      message: { role: 'user', content: text },
+      message: { role: 'user', content },
       parent_tool_use_id: null,
       session_id: '',
     });
@@ -330,7 +342,7 @@ function waitForIpcMessage(): Promise<string | null> {
  * Also pipes IPC messages into the stream during the query.
  */
 async function runQuery(
-  prompt: string,
+  prompt: string | ContentBlock[],
   sessionId: string | undefined,
   mcpServerPath: string,
   containerInput: ContainerInput,
@@ -464,6 +476,47 @@ async function runQuery(
   return { newSessionId, lastAssistantUuid, closedDuringQuery };
 }
 
+/**
+ * Parse a prompt string for [Photo: /workspace/group/media/...] placeholders,
+ * read each image from the container filesystem, and return a ContentBlock[].
+ * Returns the original string unchanged if no images are found.
+ */
+function buildMultimodalContent(prompt: string): string | ContentBlock[] {
+  const IMAGE_PATTERN = /\[Photo: (\/workspace\/group\/media\/[^\]]+)\]/g;
+  const matches = [...prompt.matchAll(IMAGE_PATTERN)];
+  if (matches.length === 0) return prompt;
+
+  const blocks: ContentBlock[] = [];
+  let lastIndex = 0;
+
+  for (const match of matches) {
+    const [fullMatch, filePath] = match;
+    const offset = match.index!;
+
+    const textBefore = prompt.slice(lastIndex, offset);
+    if (textBefore.trim()) blocks.push({ type: 'text', text: textBefore });
+
+    try {
+      const data = fs.readFileSync(filePath);
+      const base64 = data.toString('base64');
+      const ext = path.extname(filePath).slice(1).toLowerCase();
+      const mediaType = ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : 'image/jpeg';
+      blocks.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } });
+      log(`Encoded image: ${filePath} (${data.length} bytes)`);
+    } catch (err) {
+      log(`Failed to read image ${filePath}, keeping placeholder`);
+      blocks.push({ type: 'text', text: fullMatch });
+    }
+
+    lastIndex = offset + fullMatch.length;
+  }
+
+  const tail = prompt.slice(lastIndex);
+  if (tail.trim()) blocks.push({ type: 'text', text: tail });
+
+  return blocks;
+}
+
 async function main(): Promise<void> {
   let containerInput: ContainerInput;
 
@@ -505,13 +558,16 @@ async function main(): Promise<void> {
     prompt += '\n' + pending.join('\n');
   }
 
+  // Expand any [Photo: ...] placeholders into multimodal content blocks
+  let currentContent: string | ContentBlock[] = buildMultimodalContent(prompt);
+
   // Query loop: run query → wait for IPC message → run new query → repeat
   let resumeAt: string | undefined;
   try {
     while (true) {
       log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`);
 
-      const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
+      const queryResult = await runQuery(currentContent, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
       if (queryResult.newSessionId) {
         sessionId = queryResult.newSessionId;
       }
@@ -541,6 +597,7 @@ async function main(): Promise<void> {
 
       log(`Got new message (${nextMessage.length} chars), starting new query`);
       prompt = nextMessage;
+      currentContent = prompt;
     }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);

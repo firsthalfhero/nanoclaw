@@ -49,18 +49,24 @@ When you learn something important:
 
 ## Media Attachments
 
-When a message contains `[Photo: /workspace/group/media/<filename>]`, read the image file directly using the Read tool.
+When a message contains `[Photo: /workspace/group/media/<filename>]`, the image is embedded directly and you can see it above.
 
-When a message contains `[Voice: /workspace/group/media/<filename>]`, transcribe it using the OpenAI Whisper API:
+Voice and audio messages are automatically transcribed before reaching you and appear as `[Voice transcription: ...]` or `[Audio transcription: ...]`. Respond to the transcribed content as if the user typed it.
+
+If transcription failed and you see `[Voice: /workspace/group/media/<filename>]`, you can attempt manual transcription using `GOOGLE_GEMINI_API_KEY` if available:
 
 ```bash
-curl -s https://api.openai.com/v1/audio/transcriptions \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -F model=whisper-1 \
-  -F file=@/workspace/group/media/<filename>
+# Read file and transcribe via Gemini
+python3 -c "
+import base64, json, urllib.request, os
+data = open('/workspace/group/media/<filename>', 'rb').read()
+body = json.dumps({'contents':[{'parts':[{'text':'Transcribe this audio exactly as spoken. Return only the transcription.'},{'inline_data':{'mime_type':'audio/ogg','data':base64.b64encode(data).decode()}}]}]}).encode()
+req = urllib.request.Request(f'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={os.environ[\"GOOGLE_GEMINI_API_KEY\"]}', data=body, headers={'Content-Type':'application/json'}, method='POST')
+print(json.loads(urllib.request.urlopen(req).read())['candidates'][0]['content']['parts'][0]['text'])
+"
 ```
 
-Then respond to the transcribed content as if the user typed it. If `OPENAI_API_KEY` is not set, say: "I received your voice message but I can't transcribe it — no OpenAI API key is configured."
+If `GOOGLE_GEMINI_API_KEY` is not set, say: "I received your voice message but can't transcribe it — no Gemini API key is configured."
 
 ## Message Formatting
 
