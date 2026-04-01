@@ -47,6 +47,21 @@ When you learn something important:
 - Split files larger than 500 lines into folders
 - Keep an index in your memory for the files you create
 
+## Media Attachments
+
+When a message contains `[Photo: /workspace/group/media/<filename>]`, read the image file directly using the Read tool.
+
+When a message contains `[Voice: /workspace/group/media/<filename>]`, transcribe it using the OpenAI Whisper API:
+
+```bash
+curl -s https://api.openai.com/v1/audio/transcriptions \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -F model=whisper-1 \
+  -F file=@/workspace/group/media/<filename>
+```
+
+Then respond to the transcribed content as if the user typed it. If `OPENAI_API_KEY` is not set, say: "I received your voice message but I can't transcribe it — no OpenAI API key is configured."
+
 ## Message Formatting
 
 NEVER use markdown. Only use WhatsApp/Telegram formatting:

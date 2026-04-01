@@ -248,6 +248,8 @@ function buildContainerArgs(
     'BRAVE_API_KEY',
     // Mobility Tracker (Firebase service account JSON)
     'FIREBASE_SERVICE_ACCOUNT',
+    // Voice transcription via OpenAI Whisper
+    'OPENAI_API_KEY',
   ]);
   for (const [key, value] of Object.entries(skillEnv)) {
     args.push('-e', `${key}=${value}`);

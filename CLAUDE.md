@@ -104,6 +104,20 @@ The agent container is **ephemeral** — it spins up per conversation and disapp
 
 **WhatsApp not connecting after upgrade:** WhatsApp is now a separate channel fork, not bundled in core. Run `/add-whatsapp` (or `git remote add whatsapp https://github.com/qwibitai/nanoclaw-whatsapp.git && git fetch whatsapp main && (git merge whatsapp/main || { git checkout --theirs package-lock.json && git add package-lock.json && git merge --continue; }) && npm run build`) to install it. Existing auth credentials and groups are preserved.
 
+## Remote Access (RDP via ngrok)
+
+RDP is configured on port **65136** (non-standard). ngrok tunnels it externally via a Docker container at `c:\Users\George\Documents\projects\ngrok\local-tunnel\`.
+
+- ngrok config: `C:\Users\George\Documents\projects\ngrok\local-tunnel\ngrok.yml`
+- ngrok container: `local-tunnel-ngrok-1` (authtoken in `NGROK_AUTHTOKEN` env var, account: george.cains@gmail.com)
+- ngrok inspector: http://localhost:4040
+- The public TCP address changes on every container restart (free plan). Check current address at http://localhost:4040/api/tunnels
+
+To get the current RDP address:
+```bash
+curl -s http://localhost:4040/api/tunnels | python -c "import sys,json; t=[x for x in json.load(sys.stdin)['tunnels'] if x['name']=='rdp']; print(t[0]['public_url'] if t else 'tunnel not running')"
+```
+
 ## Container Build Cache
 
 The container buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps — the builder's volume retains stale files. To force a truly clean rebuild, prune the builder then re-run `./container/build.sh`.

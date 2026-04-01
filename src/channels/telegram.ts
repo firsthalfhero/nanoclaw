@@ -1,6 +1,9 @@
+import fs from 'fs';
+import path from 'path';
+
 import { Api, Bot } from 'grammy';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { ASSISTANT_NAME, GROUPS_DIR, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -194,9 +197,59 @@ export class TelegramChannel implements Channel {
       });
     };
 
-    this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+    this.bot.on('message:photo', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      try {
+        const photos = ctx.message.photo;
+        const best = photos[photos.length - 1];
+        const file = await ctx.api.getFile(best.file_id);
+        const fileUrl = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+
+        const mediaDir = path.join(GROUPS_DIR, group.folder, 'media');
+        fs.mkdirSync(mediaDir, { recursive: true });
+        const fname = `photo_${ctx.message.message_id}_${Date.now()}.jpg`;
+        const dest = path.join(mediaDir, fname);
+        const res = await fetch(fileUrl);
+        const buf = await res.arrayBuffer();
+        fs.writeFileSync(dest, Buffer.from(buf));
+
+        const containerPath = `/workspace/group/media/${fname}`;
+        const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
+        storeNonText(ctx, `[Photo: ${containerPath}]${caption}`);
+      } catch (err) {
+        logger.warn({ err }, 'Failed to download photo, using placeholder');
+        storeNonText(ctx, '[Photo]');
+      }
+    });
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
-    this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
+    this.bot.on('message:voice', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      try {
+        const voice = ctx.message.voice;
+        const file = await ctx.api.getFile(voice.file_id);
+        const fileUrl = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+
+        const mediaDir = path.join(GROUPS_DIR, group.folder, 'media');
+        fs.mkdirSync(mediaDir, { recursive: true });
+        const fname = `voice_${ctx.message.message_id}_${Date.now()}.ogg`;
+        const dest = path.join(mediaDir, fname);
+        const res = await fetch(fileUrl);
+        const buf = await res.arrayBuffer();
+        fs.writeFileSync(dest, Buffer.from(buf));
+
+        const containerPath = `/workspace/group/media/${fname}`;
+        storeNonText(ctx, `[Voice: ${containerPath}]`);
+      } catch (err) {
+        logger.warn({ err }, 'Failed to download voice message, using placeholder');
+        storeNonText(ctx, '[Voice message]');
+      }
+    });
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
     this.bot.on('message:document', (ctx) => {
       const name = ctx.message.document?.file_name || 'file';
