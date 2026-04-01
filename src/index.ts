@@ -264,6 +264,15 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   await channel.sendMessage(chatJid, 'Got it, on it...');
   let hadError = false;
   let outputSentToUser = false;
+  let usageLimitHit = false;
+
+  // Patterns that indicate Claude's usage cap was hit — intercept and failover
+  const USAGE_LIMIT_PATTERNS = [
+    /you're out of extra usage/i,
+    /out of extra usage/i,
+    /usage.*resets/i,
+    /claude\.ai\/upgrade/i,
+  ];
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
@@ -275,6 +284,14 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
+
+      // Intercept usage-limit messages — don't forward to user, flag for Gemini failover
+      if (text && USAGE_LIMIT_PATTERNS.some((p) => p.test(text))) {
+        logger.warn({ group: group.name }, 'Claude usage limit hit, flagging for Gemini failover');
+        usageLimitHit = true;
+        return;
+      }
+
       if (text) {
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
@@ -294,6 +311,18 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
+
+  if (usageLimitHit && !outputSentToUser) {
+    logger.warn({ group: group.name }, 'Claude usage limit hit, attempting Gemini failover');
+    const geminiResponse = await fallbackToGemini(prompt);
+    if (geminiResponse) {
+      logger.info({ group: group.name }, 'Gemini failover succeeded after usage limit');
+      await channel.sendMessage(chatJid, `_(Claude usage limit reached — responding via Gemini)_\n\n${geminiResponse}`);
+      return true;
+    }
+    await channel.sendMessage(chatJid, "Claude's usage limit has been reached and Gemini fallback also failed. Please try again later.");
+    return true;
+  }
 
   if (output === 'error' || hadError) {
     // If we already sent output to the user, don't roll back the cursor —
