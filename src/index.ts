@@ -169,7 +169,8 @@ export function _setRegisteredGroups(
 async function fallbackToGemini(prompt: string): Promise<string | null> {
   try {
     const envVars = readEnvFile(['GOOGLE_GEMINI_API_KEY']);
-    const geminiKey = process.env.GOOGLE_GEMINI_API_KEY || envVars.GOOGLE_GEMINI_API_KEY;
+    const geminiKey =
+      process.env.GOOGLE_GEMINI_API_KEY || envVars.GOOGLE_GEMINI_API_KEY;
     if (!geminiKey) return null;
 
     const res = await fetch(
@@ -306,11 +307,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
 
     // Claude is down — attempt Gemini fallback before giving up
-    logger.warn({ group: group.name }, 'Claude agent failed, attempting Gemini fallback');
+    logger.warn(
+      { group: group.name },
+      'Claude agent failed, attempting Gemini fallback',
+    );
     const geminiResponse = await fallbackToGemini(prompt);
     if (geminiResponse) {
       logger.info({ group: group.name }, 'Gemini fallback succeeded');
-      await channel.sendMessage(chatJid, `_(Claude is unavailable — responding via Gemini)_\n\n${geminiResponse}`);
+      await channel.sendMessage(
+        chatJid,
+        `_(Claude is unavailable — responding via Gemini)_\n\n${geminiResponse}`,
+      );
       return true;
     }
 
