@@ -13,6 +13,11 @@ import urllib.parse
 import urllib.error
 from datetime import datetime, timezone, timedelta
 
+
+class TokenRevokedException(Exception):
+    pass
+
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -49,6 +54,8 @@ def _request(method, url, data=None, headers=None, params=None):
             err = json.loads(body)
         except Exception:
             err = {"raw": body}
+        if err.get("error") == "invalid_grant":
+            raise TokenRevokedException(err.get("error_description", "invalid_grant"))
         print(f"HTTP {e.code}: {json.dumps(err, indent=2)}", file=sys.stderr)
         sys.exit(1)
 
@@ -136,24 +143,118 @@ def _refresh(tok):
     return tok
 
 
+AUTH_STATE_PATH = TOKEN_PATH + ".auth-state"
+
+
+def _start_pending_auth():
+    """Start device flow, save state file, print instructions, then exit.
+
+    Called when the refresh token is revoked.  The container agent sees the
+    printed URL+code and relays them to the user, then waits for the user to
+    say they're done before calling `gcal.py auth-complete`.
+    """
+    import time
+    client_id, _secret = _get_client()
+    resp = _request("POST", DEVICE_URL, data={"client_id": client_id, "scope": SCOPE})
+    state = {
+        "device_code": resp["device_code"],
+        "interval": resp.get("interval", 5),
+        "deadline": time.time() + resp.get("expires_in", 1800),
+    }
+    os.makedirs(os.path.dirname(AUTH_STATE_PATH), exist_ok=True)
+    with open(AUTH_STATE_PATH, "w") as f:
+        json.dump(state, f)
+    verify_url = resp.get("verification_url", "https://google.com/device")
+    user_code  = resp["user_code"]
+    print("Google Calendar needs re-authorisation.")
+    print(f"  1. Open: {verify_url}")
+    print(f"  2. Enter code: {user_code}")
+    print("  3. Tell me when you're done and I'll complete the calendar operation.")
+    sys.exit(2)
+
+
 def _get_access_token():
     tok = _load_token()
     if not tok:
-        print("Not authenticated. Run:  gcal.py auth", file=sys.stderr)
-        sys.exit(1)
+        if os.path.exists(AUTH_STATE_PATH):
+            print("Auth in progress — complete the Google authorisation then reply here.",
+                  file=sys.stderr)
+            sys.exit(2)
+        _start_pending_auth()
     expires_at = tok.get("expires_at")
     if expires_at:
         try:
             exp = datetime.fromisoformat(expires_at)
             if datetime.now(timezone.utc) >= exp - timedelta(seconds=60):
-                tok = _refresh(tok)
+                try:
+                    tok = _refresh(tok)
+                except TokenRevokedException:
+                    _start_pending_auth()
+        except TokenRevokedException:
+            _start_pending_auth()
         except Exception:
-            tok = _refresh(tok)
+            try:
+                tok = _refresh(tok)
+            except TokenRevokedException:
+                _start_pending_auth()
     return tok["access_token"]
 
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
+
+def cmd_auth_complete(_args):
+    """Complete a pending device-flow auth (after user visits the URL and enters the code)."""
+    import time
+    try:
+        with open(AUTH_STATE_PATH) as f:
+            state = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        print("No pending auth. Run:  gcal.py auth")
+        sys.exit(1)
+
+    if time.time() > state["deadline"]:
+        try:
+            os.unlink(AUTH_STATE_PATH)
+        except OSError:
+            pass
+        print("Auth code expired. Run:  gcal.py auth  to start over.")
+        sys.exit(1)
+
+    client_id, client_secret = _get_client()
+    # Try a few times in case the user just completed auth
+    for attempt in range(4):
+        try:
+            tok_resp = _request("POST", TOKEN_URL, data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "device_code": state["device_code"],
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            })
+        except SystemExit:
+            # authorization_pending — wait and retry
+            if attempt < 3:
+                time.sleep(state.get("interval", 5))
+                continue
+            print("Not authorised yet. Complete the Google auth then try again.")
+            sys.exit(1)
+
+        if "access_token" in tok_resp:
+            tok_resp["expires_at"] = (
+                datetime.now(timezone.utc)
+                + timedelta(seconds=tok_resp.get("expires_in", 3600))
+            ).isoformat()
+            _save_token(tok_resp)
+            try:
+                os.unlink(AUTH_STATE_PATH)
+            except OSError:
+                pass
+            print("Authorised. Google Calendar is ready — retry your request.")
+            return
+
+    print("Not authorised yet. Complete the Google auth then try again.")
+    sys.exit(1)
+
 
 def cmd_auth(_args):
     """Initiate OAuth2 device flow and save token."""
@@ -487,8 +588,9 @@ def cmd_search(args):
 # ---------------------------------------------------------------------------
 
 COMMANDS = {
-    "auth":      cmd_auth,
-    "calendars": cmd_calendars,
+    "auth":          cmd_auth,
+    "auth-complete": cmd_auth_complete,
+    "calendars":     cmd_calendars,
     "list":      cmd_list,
     "today":     cmd_today,
     "create":    cmd_create,

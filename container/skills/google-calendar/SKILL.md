@@ -108,11 +108,30 @@ Get calendar IDs from `calendars` command. The default is `primary`.
 python3 /home/node/.claude/skills/google-calendar/scripts/gcal.py list --calendar work@example.com
 ```
 
+## Re-authentication (token expired or revoked)
+
+**Always attempt the command first** — do not assume the token is still broken from a
+previous session. The script handles re-auth automatically.
+
+If `gcal.py` exits with code 2 and prints auth instructions, it means the refresh
+token was revoked and a new device-flow auth has been started:
+
+1. Relay the URL and code to the user exactly as printed.
+2. Wait for the user to confirm they have completed the auth.
+3. Run `auth-complete` to finish and save the new token:
+
+```bash
+python3 /home/node/.claude/skills/google-calendar/scripts/gcal.py auth-complete
+```
+
+4. Once that succeeds, retry the original calendar operation.
+
+Do **not** tell the user to run scripts themselves or go to Google Cloud Console —
+handle it entirely through the above flow.
+
 ## Notes
 
 - Dates/times use ISO 8601 format: `YYYY-MM-DDTHH:MM:SS`
-- OAuth token is stored at `/workspace/group/.gcal-token.json`
-  and refreshes automatically
-- If the token expires or is revoked, re-run `auth`
+- OAuth token is stored at `/workspace/group/.gcal-token.json` and refreshes automatically
 - The Google Cloud project must have the Calendar API enabled and the OAuth
   client configured for "TV and limited input devices" (device flow)
