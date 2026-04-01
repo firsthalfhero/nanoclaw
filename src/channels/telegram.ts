@@ -1,6 +1,9 @@
+import fs from 'fs';
+import path from 'path';
+
 import { Api, Bot } from 'grammy';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { ASSISTANT_NAME, GROUPS_DIR, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -37,6 +40,41 @@ async function sendTelegramMessage(
     // Fallback: send as plain text if Markdown parsing fails
     logger.debug({ err }, 'Markdown send failed, falling back to plain text');
     await api.sendMessage(chatId, text, options);
+  }
+}
+
+async function transcribeWithGemini(filePath: string, apiKey: string): Promise<string | null> {
+  try {
+    const fileBuffer = fs.readFileSync(filePath);
+    const base64Audio = fileBuffer.toString('base64');
+    const ext = path.extname(filePath).slice(1).toLowerCase();
+    const mimeType = ext === 'ogg' ? 'audio/ogg' : ext === 'mp3' ? 'audio/mpeg' : 'audio/wav';
+
+    const body = {
+      contents: [{
+        parts: [
+          { text: 'Transcribe this audio message exactly as spoken. Return only the transcription, no commentary.' },
+          { inline_data: { mime_type: mimeType, data: base64Audio } },
+        ],
+      }],
+    };
+
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+    );
+
+    if (!res.ok) {
+      logger.warn({ status: res.status }, 'Gemini transcription API error');
+      return null;
+    }
+
+    const json = await res.json() as any;
+    const text = (json?.candidates?.[0]?.content?.parts?.[0]?.text as string | undefined)?.trim();
+    return text || null;
+  } catch (err) {
+    logger.warn({ err }, 'transcribeWithGemini failed');
+    return null;
   }
 }
 
@@ -194,10 +232,110 @@ export class TelegramChannel implements Channel {
       });
     };
 
-    this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+    this.bot.on('message:photo', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      try {
+        const photos = ctx.message.photo;
+        const best = photos[photos.length - 1];
+        const file = await ctx.api.getFile(best.file_id);
+        const fileUrl = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+
+        const mediaDir = path.join(GROUPS_DIR, group.folder, 'media');
+        fs.mkdirSync(mediaDir, { recursive: true });
+        const fname = `photo_${ctx.message.message_id}_${Date.now()}.jpg`;
+        const dest = path.join(mediaDir, fname);
+        const res = await fetch(fileUrl);
+        const buf = await res.arrayBuffer();
+        fs.writeFileSync(dest, Buffer.from(buf));
+
+        const containerPath = `/workspace/group/media/${fname}`;
+        const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
+        storeNonText(ctx, `[Photo: ${containerPath}]${caption}`);
+      } catch (err) {
+        logger.warn({ err }, 'Failed to download photo, using placeholder');
+        storeNonText(ctx, '[Photo]');
+      }
+    });
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
-    this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
-    this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
+    this.bot.on('message:voice', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      try {
+        const voice = ctx.message.voice;
+        const file = await ctx.api.getFile(voice.file_id);
+        const fileUrl = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+
+        const mediaDir = path.join(GROUPS_DIR, group.folder, 'media');
+        fs.mkdirSync(mediaDir, { recursive: true });
+        const fname = `voice_${ctx.message.message_id}_${Date.now()}.ogg`;
+        const dest = path.join(mediaDir, fname);
+        const res = await fetch(fileUrl);
+        const buf = await res.arrayBuffer();
+        fs.writeFileSync(dest, Buffer.from(buf));
+
+        const containerPath = `/workspace/group/media/${fname}`;
+        const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
+
+        const envVars = readEnvFile(['GOOGLE_GEMINI_API_KEY']);
+        const geminiKey = process.env.GOOGLE_GEMINI_API_KEY || envVars.GOOGLE_GEMINI_API_KEY;
+        if (geminiKey) {
+          const transcript = await transcribeWithGemini(dest, geminiKey);
+          if (transcript) {
+            storeNonText(ctx, `[Voice transcription: ${transcript}]${caption}`);
+            return;
+          }
+        }
+
+        storeNonText(ctx, `[Voice: ${containerPath}]`);
+      } catch (err) {
+        logger.warn(
+          { err },
+          'Failed to download voice message, using placeholder',
+        );
+        storeNonText(ctx, '[Voice message]');
+      }
+    });
+    this.bot.on('message:audio', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      try {
+        const audio = ctx.message.audio;
+        const file = await ctx.api.getFile(audio.file_id);
+        const fileUrl = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+
+        const mediaDir = path.join(GROUPS_DIR, group.folder, 'media');
+        fs.mkdirSync(mediaDir, { recursive: true });
+        const ext = path.extname(file.file_path ?? '.mp3').slice(1) || 'mp3';
+        const fname = `audio_${ctx.message.message_id}_${Date.now()}.${ext}`;
+        const dest = path.join(mediaDir, fname);
+        const res = await fetch(fileUrl);
+        const buf = await res.arrayBuffer();
+        fs.writeFileSync(dest, Buffer.from(buf));
+
+        const containerPath = `/workspace/group/media/${fname}`;
+        const envVars = readEnvFile(['GOOGLE_GEMINI_API_KEY']);
+        const geminiKey = process.env.GOOGLE_GEMINI_API_KEY || envVars.GOOGLE_GEMINI_API_KEY;
+        if (geminiKey) {
+          const transcript = await transcribeWithGemini(dest, geminiKey);
+          if (transcript) {
+            storeNonText(ctx, `[Audio transcription: ${transcript}]`);
+            return;
+          }
+        }
+
+        storeNonText(ctx, `[Audio: ${containerPath}]`);
+      } catch (err) {
+        logger.warn({ err }, 'Failed to process audio message');
+        storeNonText(ctx, '[Audio]');
+      }
+    });
     this.bot.on('message:document', (ctx) => {
       const name = ctx.message.document?.file_name || 'file';
       storeNonText(ctx, `[Document: ${name}]`);
