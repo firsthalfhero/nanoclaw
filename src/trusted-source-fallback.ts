@@ -19,9 +19,10 @@ function formatSlugName(slug: string): string {
 }
 
 function parseWhiteHousePresident(html: string): string | null {
-  const match = html.match(
-    /href=["']https?:\/\/www\.whitehouse\.gov\/administration\/([a-z-]+)\/["']/i,
-  ) || html.match(/href=["']\/administration\/([a-z-]+)\/["']/i);
+  const match =
+    html.match(
+      /href=["']https?:\/\/www\.whitehouse\.gov\/administration\/([a-z-]+)\/["']/i,
+    ) || html.match(/href=["']\/administration\/([a-z-]+)\/["']/i);
   if (!match?.[1]) return null;
   return formatSlugName(match[1]);
 }
