@@ -8,6 +8,7 @@ dist/
 store/
 data/
 logs/
+graphify-out/
 
 # Groups - only track base structure and specific CLAUDE.md files
 groups/*
