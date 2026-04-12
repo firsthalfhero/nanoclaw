@@ -1,6 +1,7 @@
 # Start NanoClaw with watchdog — restarts automatically if it crashes or is killed by sleep/lock.
 # Usage: .\start.ps1
 
+try {
 $root = $PSScriptRoot
 $outLog = "$root\logs\nanoclaw-out.log"
 $errLog = "$root\logs\nanoclaw-err.log"
@@ -14,7 +15,9 @@ $lockFile = "$root\logs\watchdog.lock"
 if (Test-Path $lockFile) {
     $lockPid = Get-Content $lockFile -ErrorAction SilentlyContinue
     if ($lockPid -and (Get-Process -Id $lockPid -ErrorAction SilentlyContinue)) {
-        exit 0  # Another watchdog is running
+        Write-Host "Stopping existing NanoClaw watchdog (PID $lockPid)..." -ForegroundColor Yellow
+        Stop-Process -Id $lockPid -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
     }
 }
 $PID | Out-File $lockFile -Force
@@ -22,13 +25,28 @@ $PID | Out-File $lockFile -Force
 # Kill any existing NanoClaw process holding port 3001
 $existing = Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess
 if ($existing) {
+    Write-Host "Stopping existing NanoClaw process (PID $existing)..." -ForegroundColor Yellow
     Stop-Process -Id $existing -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
 }
 
 # Build first
 Push-Location $root
-& npm run build 2>&1 | Out-Null
+Write-Host "Building NanoClaw..." -ForegroundColor Yellow
+try {
+    $buildResult = & npm.cmd run build 2>&1
+    $buildSuccess = $LASTEXITCODE -eq 0
+} catch {
+    $buildSuccess = $false
+    $buildResult = $_.Exception.Message
+}
+if (-not $buildSuccess) {
+    Write-Host "Build failed:" -ForegroundColor Red
+    $buildResult | Out-Host
+    throw "Build failed"
+} else {
+    Write-Host "Build succeeded." -ForegroundColor Green
+}
 Pop-Location
 
 function Write-WatchdogLog($msg) {
@@ -36,28 +54,67 @@ function Write-WatchdogLog($msg) {
     "$ts $msg" | Tee-Object -FilePath $watchdogLog -Append | Out-Null
 }
 
+Write-Host "Starting NanoClaw watchdog..." -ForegroundColor Cyan
 Write-WatchdogLog "Watchdog started"
 
-# Watchdog loop — restart NanoClaw whenever it exits
-while ($true) {
+# Write watchdog script to a file — avoids -Command escaping/concatenation issues
+$watchdogFile = "$root\logs\watchdog-script.ps1"
+@"
+`$root = "$root"
+`$outLog = "$outLog"
+`$errLog = "$errLog"
+`$watchdogLog = "$watchdogLog"
+
+function Write-WatchdogLog(`$msg) {
+    `$ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    "`$ts `$msg" | Out-File -FilePath `$watchdogLog -Append
+}
+
+# Watchdog loop - restart NanoClaw whenever it exits
+while (`$true) {
     # Kill anything still on port 3001 before starting
-    $existing = Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess
-    if ($existing) {
-        Stop-Process -Id $existing -Force -ErrorAction SilentlyContinue
+    `$existing = Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess
+    if (`$existing) {
+        Write-WatchdogLog "Killing process `$existing on port 3001..."
+        Stop-Process -Id `$existing -Force -ErrorAction SilentlyContinue
+    }
+
+    # Wait for port 3001 to be free - Windows TCP sockets stay in TIME_WAIT for
+    # up to 120s after a kill. Without this, the new instance hits EADDRINUSE on
+    # startup and exits immediately, causing a rapid crash-restart loop.
+    `$maxWait = 15
+    `$waited = 0
+    while ((Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue) -and (`$waited -lt `$maxWait)) {
+        `$waited++
+        Write-WatchdogLog "Port 3001 still in use, waiting... (`$waited/`$maxWait)"
         Start-Sleep -Seconds 1
+    }
+    if (Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue) {
+        Write-WatchdogLog "WARNING: port 3001 still occupied after `$maxWait s - proceeding anyway"
     }
 
     Write-WatchdogLog "Starting NanoClaw..."
-    $proc = Start-Process -FilePath "node" `
-        -ArgumentList "dist/index.js" `
-        -WorkingDirectory $root `
-        -RedirectStandardOutput $outLog `
-        -RedirectStandardError $errLog `
+    `$proc = Start-Process -FilePath "node" ``
+        -ArgumentList "dist/index.js" ``
+        -WorkingDirectory `$root ``
+        -RedirectStandardOutput `$outLog ``
+        -RedirectStandardError `$errLog ``
         -NoNewWindow -PassThru
 
-    Write-WatchdogLog "NanoClaw running (PID $($proc.Id))"
-    $proc.WaitForExit()
-    $code = $proc.ExitCode
-    Write-WatchdogLog "NanoClaw exited (code $code) - restarting in 5s..."
+    Write-WatchdogLog "NanoClaw running (PID `$(`$proc.Id))"
+    `$proc.WaitForExit()
+    `$code = `$proc.ExitCode
+    Write-WatchdogLog "NanoClaw exited (code `$code) - restarting in 5s..."
     Start-Sleep -Seconds 5
+}
+"@ | Out-File -FilePath $watchdogFile -Encoding UTF8 -Force
+
+Start-Process -FilePath "powershell.exe" `
+    -ArgumentList "-ExecutionPolicy", "Bypass", "-File", $watchdogFile `
+    -NoNewWindow
+
+Write-Host "NanoClaw watchdog started in background. Check logs at $watchdogLog" -ForegroundColor Green
+} catch {
+    Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
 }

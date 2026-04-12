@@ -522,12 +522,36 @@ export async function runContainerAgent(
       const isError = code !== 0;
 
       if (isVerbose || isError) {
+        // Redact secret env vars from the logged container args.
+        // The args array is pairs: [..., '-e', 'KEY=VALUE', ...].
+        // Any value whose key ends with a sensitive suffix has its value replaced.
+        const REDACT_SUFFIXES = [
+          '_KEY',
+          '_SECRET',
+          '_TOKEN',
+          '_ACCOUNT',
+          '_CREDENTIAL',
+          '_PASSWORD',
+        ];
+        const redactedArgs = containerArgs.map((arg, i) => {
+          if (i > 0 && containerArgs[i - 1] === '-e') {
+            const eqIdx = arg.indexOf('=');
+            if (eqIdx !== -1) {
+              const key = arg.slice(0, eqIdx);
+              if (REDACT_SUFFIXES.some((s) => key.toUpperCase().endsWith(s))) {
+                return `${key}=[redacted]`;
+              }
+            }
+          }
+          return arg;
+        });
+
         logLines.push(
           `=== Input ===`,
           JSON.stringify(input, null, 2),
           ``,
           `=== Container Args ===`,
-          containerArgs.join(' '),
+          redactedArgs.join(' '),
           ``,
           `=== Mounts ===`,
           mounts
