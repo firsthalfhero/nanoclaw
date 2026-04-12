@@ -25,6 +25,34 @@ Single Node.js process with a skill-based channel system. Channels self-register
 - When changing runtime or security behavior, trace impacts across `src/index.ts`, container execution, IPC, and the database.
 - Run direct commands yourself instead of instructing the user to do so.
 
+## Git Rules
+
+These rules are mandatory. Violations make it impossible to audit which AI introduced a change.
+
+### Co-author tag — required on every commit, no exceptions
+
+Every commit you create must include this trailer in the commit message body:
+
+```text
+Co-authored-by: Codex <codex@openai.com>
+```
+
+No exceptions: bug fixes, typo patches, version bumps, merge commits — all of them. A commit without this tag will be treated as unattributed and may be reverted.
+
+### Branch naming
+
+- Never commit task work directly to `main`.
+- Always create a feature branch with the prefix `CODEX-` (e.g. `CODEX-fix-ipc-race`).
+- Open a pull request to `main`; do not merge it yourself unless explicitly instructed.
+
+### Hard limits
+
+- Never force-push (`--force` / `--force-with-lease`) to `main` or any shared branch.
+- Never bypass hooks (`--no-verify`).
+- Never amend a commit that has already been pushed.
+- Never use `git reset --hard` on a shared branch.
+- Do not create empty commits.
+
 ## Graphify
 
 This project has a Graphify knowledge graph at `graphify-out/`.

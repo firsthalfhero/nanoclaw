@@ -66,6 +66,7 @@ import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { readEnvFile } from './env.js';
 import { fallbackToGeminiApi } from './gemini-fallback.js';
 import { fallbackToOpenAI } from './openai-fallback.js';
+import { fallbackToTrustedSource } from './trusted-source-fallback.js';
 import {
   restoreRemoteControl,
   startRemoteControl,
@@ -238,7 +239,11 @@ async function fallbackToChatGPT(
 
 /** Try OpenAI then Gemini in order. Returns the first that succeeds. */
 async function tryFallback(prompt: string): Promise<FallbackResult | null> {
-  return (await fallbackToChatGPT(prompt)) ?? (await fallbackToGemini(prompt));
+  return (
+    (await fallbackToTrustedSource(prompt)) ??
+    (await fallbackToChatGPT(prompt)) ??
+    (await fallbackToGemini(prompt))
+  );
 }
 
 /**
