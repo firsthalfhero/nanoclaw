@@ -31,6 +31,8 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 | `/update-nanoclaw` | Bring upstream NanoClaw updates into a customized install |
 | `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
 | `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
+| `/graphify` | Build knowledge graphs from project files for token-efficient context. Run in the target project directory. (`.claude/skills/graphify/SKILL.md`) |
+| `/obsidian-cli` | Structured Obsidian vault operations: search, task management, wikilink-aware note moves. Requires Obsidian v1.12+ running for IPC commands. (`.claude/skills/obsidian-cli/SKILL.md`) |
 
 ## Custom Skills (ported from OpenClaw)
 
@@ -121,3 +123,12 @@ curl -s http://localhost:4040/api/tunnels | python -c "import sys,json; t=[x for
 ## Container Build Cache
 
 The container buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps — the builder's volume retains stale files. To force a truly clean rebuild, prune the builder then re-run `./container/build.sh`.
+
+## graphify
+
+This project has a graphify knowledge graph at graphify-out/.
+
+Rules:
+- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
+- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
+- After modifying code files in this session, run `python3 -c "from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path('.'))"` to keep the graph current

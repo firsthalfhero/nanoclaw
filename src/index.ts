@@ -287,7 +287,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
       // Intercept usage-limit messages — don't forward to user, flag for Gemini failover
       if (text && USAGE_LIMIT_PATTERNS.some((p) => p.test(text))) {
-        logger.warn({ group: group.name }, 'Claude usage limit hit, flagging for Gemini failover');
+        logger.warn(
+          { group: group.name },
+          'Claude usage limit hit, flagging for Gemini failover',
+        );
         usageLimitHit = true;
         return;
       }
@@ -313,14 +316,26 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   if (idleTimer) clearTimeout(idleTimer);
 
   if (usageLimitHit && !outputSentToUser) {
-    logger.warn({ group: group.name }, 'Claude usage limit hit, attempting Gemini failover');
+    logger.warn(
+      { group: group.name },
+      'Claude usage limit hit, attempting Gemini failover',
+    );
     const geminiResponse = await fallbackToGemini(prompt);
     if (geminiResponse) {
-      logger.info({ group: group.name }, 'Gemini failover succeeded after usage limit');
-      await channel.sendMessage(chatJid, `_(Claude usage limit reached — responding via Gemini)_\n\n${geminiResponse}`);
+      logger.info(
+        { group: group.name },
+        'Gemini failover succeeded after usage limit',
+      );
+      await channel.sendMessage(
+        chatJid,
+        `_(Claude usage limit reached — responding via Gemini)_\n\n${geminiResponse}`,
+      );
       return true;
     }
-    await channel.sendMessage(chatJid, "Claude's usage limit has been reached and Gemini fallback also failed. Please try again later.");
+    await channel.sendMessage(
+      chatJid,
+      "Claude's usage limit has been reached and Gemini fallback also failed. Please try again later.",
+    );
     return true;
   }
 

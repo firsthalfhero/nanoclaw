@@ -1,0 +1,11 @@
+node_modules/
+dist/
+__pycache__/
+.venv/
+graphify-out/
+*.js.map
+.git/
+data/sessions/
+data/ipc/
+store/
+logs/
