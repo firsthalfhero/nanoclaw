@@ -173,7 +173,9 @@ interface FallbackResult {
   model: string;
 }
 
-async function fallbackToGemini(prompt: string): Promise<FallbackResult | null> {
+async function fallbackToGemini(
+  prompt: string,
+): Promise<FallbackResult | null> {
   try {
     const envVars = readEnvFile(['GOOGLE_GEMINI_API_KEY']);
     const geminiKey =
@@ -203,7 +205,9 @@ async function fallbackToGemini(prompt: string): Promise<FallbackResult | null> 
   }
 }
 
-async function fallbackToChatGPT(prompt: string): Promise<FallbackResult | null> {
+async function fallbackToChatGPT(
+  prompt: string,
+): Promise<FallbackResult | null> {
   try {
     const envVars = readEnvFile(['OPENAI_API_KEY']);
     const openaiKey = process.env.OPENAI_API_KEY || envVars.OPENAI_API_KEY;
@@ -250,7 +254,9 @@ function extractApiErrorMessage(raw: string): string {
         return parsed.error.message;
       }
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   // Fall back to first line, capped at 150 chars
   const first = raw.split('\n')[0].trim();
   return first.length <= 150 ? first : `${first.slice(0, 150)}...`;
@@ -359,11 +365,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
-      logger.info({ group: group.name, text }, `Processed text: ${text.slice(0, 200)}`);
+      logger.info(
+        { group: group.name, text },
+        `Processed text: ${text.slice(0, 200)}`,
+      );
 
       // Intercept usage-limit messages — don't forward to user, flag for failover
       const matches = USAGE_LIMIT_PATTERNS.some((p) => p.test(text));
-      logger.info({ group: group.name, text, matches }, `Checking patterns for text`);
+      logger.info(
+        { group: group.name, text, matches },
+        `Checking patterns for text`,
+      );
       if (text && matches) {
         logger.warn(
           { group: group.name, text },
@@ -409,10 +421,16 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   if (idleTimer) clearTimeout(idleTimer);
 
   if (usageLimitHit && !outputSentToUser) {
-    logger.warn({ group: group.name }, 'Claude usage limit hit, attempting fallback');
+    logger.warn(
+      { group: group.name },
+      'Claude usage limit hit, attempting fallback',
+    );
     const fallback = await tryFallback(prompt);
     if (fallback) {
-      logger.info({ group: group.name, model: fallback.model }, 'Fallback succeeded after usage limit');
+      logger.info(
+        { group: group.name, model: fallback.model },
+        'Fallback succeeded after usage limit',
+      );
       await channel.sendMessage(
         chatJid,
         `_(Claude usage limit reached. Failed over to ${fallback.model})_\n\n${fallback.text}`,
@@ -428,10 +446,16 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   if (apiErrorHit && !outputSentToUser) {
     const cleanError = extractApiErrorMessage(apiErrorMessage);
-    logger.warn({ group: group.name, cleanError }, 'Claude API error, attempting fallback');
+    logger.warn(
+      { group: group.name, cleanError },
+      'Claude API error, attempting fallback',
+    );
     const fallback = await tryFallback(prompt);
     if (fallback) {
-      logger.info({ group: group.name, model: fallback.model }, 'Fallback succeeded after API error');
+      logger.info(
+        { group: group.name, model: fallback.model },
+        'Fallback succeeded after API error',
+      );
       await channel.sendMessage(
         chatJid,
         `The Claude API has failed with: ${cleanError}\n\nFailed over to ${fallback.model} and the response is below.\n\n${fallback.text}`,
@@ -457,10 +481,16 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
 
     // Claude is down — attempt fallback before giving up
-    logger.warn({ group: group.name }, 'Claude agent failed, attempting fallback');
+    logger.warn(
+      { group: group.name },
+      'Claude agent failed, attempting fallback',
+    );
     const fallback = await tryFallback(prompt);
     if (fallback) {
-      logger.info({ group: group.name, model: fallback.model }, 'Fallback succeeded');
+      logger.info(
+        { group: group.name, model: fallback.model },
+        'Fallback succeeded',
+      );
       await channel.sendMessage(
         chatJid,
         `_(Claude is unavailable. Failed over to ${fallback.model})_\n\n${fallback.text}`,
