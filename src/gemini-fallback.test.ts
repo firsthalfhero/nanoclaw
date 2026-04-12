@@ -45,7 +45,7 @@ describe('fallbackToGeminiApi', () => {
         {
           parts: [
             {
-              text: 'Use Google Search grounding for any factual claim that could be time-sensitive or stale. Base the answer on grounded search results. If you cannot verify the answer with grounding, say so.\n\nUser request: Who is the President of the USA?',
+              text: 'Use Google Search grounding for any factual claim that could be time-sensitive or stale. Base the answer on grounded search results from websites and cite the websites you used. If you cannot verify the answer with grounding, say so.\n\nUser request: Who is the President of the USA?',
             },
           ],
         },
@@ -54,9 +54,10 @@ describe('fallbackToGeminiApi', () => {
     });
     expect(result).toEqual({
       result: {
-        text: 'Grounded answer',
+        text: 'Grounded answer\n\nSources:\nhttps://example.com',
         model: 'Gemini 2.5 Flash',
         grounded: true,
+        sources: ['https://example.com'],
       },
       error: null,
     });
@@ -87,7 +88,7 @@ describe('fallbackToGeminiApi', () => {
       error: {
         status: 200,
         message:
-          'Gemini returned an ungrounded response for a fallback request that requires fresh web verification.',
+          'Gemini returned a response without grounded website sources for a fallback request that requires fresh web verification.',
       },
     });
   });

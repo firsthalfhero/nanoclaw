@@ -2,6 +2,7 @@ export interface GeminiFallbackResult {
   text: string;
   model: string;
   grounded: boolean;
+  sources: string[];
 }
 
 export interface GeminiFallbackError {
@@ -18,7 +19,7 @@ export interface GeminiFallbackResponse {
 type FetchLike = typeof fetch;
 
 const GROUNDING_INSTRUCTION =
-  'Use Google Search grounding for any factual claim that could be time-sensitive or stale. Base the answer on grounded search results. If you cannot verify the answer with grounding, say so.';
+  'Use Google Search grounding for any factual claim that could be time-sensitive or stale. Base the answer on grounded search results from websites and cite the websites you used. If you cannot verify the answer with grounding, say so.';
 
 export async function fallbackToGeminiApi(
   prompt: string,
@@ -71,9 +72,16 @@ export async function fallbackToGeminiApi(
     candidate?.content?.parts?.[0]?.text as string | undefined
   )?.trim();
   const groundingMetadata = candidate?.groundingMetadata;
+  const sources: string[] = Array.from(
+    new Set<string>(
+      (groundingMetadata?.groundingChunks || [])
+        .map((chunk: any) => chunk?.web?.uri as string | undefined)
+        .filter((uri: string | undefined): uri is string => Boolean(uri)),
+    ),
+  );
   const grounded =
-    Boolean(groundingMetadata?.webSearchQueries?.length) ||
-    Boolean(groundingMetadata?.groundingChunks?.length);
+    Boolean(groundingMetadata?.webSearchQueries?.length) &&
+    sources.length > 0;
 
   if (text && !grounded) {
     return {
@@ -81,13 +89,25 @@ export async function fallbackToGeminiApi(
       error: {
         status: 200,
         message:
-          'Gemini returned an ungrounded response for a fallback request that requires fresh web verification.',
+          'Gemini returned a response without grounded website sources for a fallback request that requires fresh web verification.',
       },
     };
   }
 
+  const sourcedText =
+    text && sources.length > 0
+      ? `${text}\n\nSources:\n${sources.join('\n')}`
+      : text;
+
   return {
-    result: text ? { text, model: 'Gemini 2.5 Flash', grounded: true } : null,
+    result: sourcedText
+      ? {
+          text: sourcedText,
+          model: 'Gemini 2.5 Flash',
+          grounded: true,
+          sources,
+        }
+      : null,
     error: null,
   };
 }
