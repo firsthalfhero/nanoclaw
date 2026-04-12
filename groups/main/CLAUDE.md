@@ -43,15 +43,15 @@ When you learn something important:
 - Split files larger than 500 lines into folders
 - Keep an index in your memory for the files you create
 
-## WhatsApp Formatting (and other messaging apps)
+## Message Formatting
 
-Do NOT use markdown headings (##) in WhatsApp messages. Only use:
+Do NOT use markdown headings (##). Only use:
 - *Bold* (single asterisks) (NEVER **double asterisks**)
 - _Italic_ (underscores)
 - • Bullets (bullet points)
 - ```Code blocks``` (triple backticks)
 
-Keep messages clean and readable for WhatsApp.
+Keep messages clean and readable.
 
 ---
 
@@ -69,8 +69,7 @@ Main has read-only access to the project and read-write access to its group fold
 | `/workspace/group` | `groups/main/` | read-write |
 
 Key paths inside the container:
-- `/workspace/project/store/messages.db` - SQLite database
-- `/workspace/project/store/messages.db` (registered_groups table) - Group config
+- `/workspace/project/store/messages.db` - SQLite database (messages, token_usage, scheduled_tasks, registered_groups)
 - `/workspace/project/groups/` - All group folders
 
 ---
@@ -80,6 +79,24 @@ Key paths inside the container:
 For group management (registering/removing/listing groups, sender allowlists, additional mounts, scheduling for other groups), read `/workspace/group/docs/group-management.md`.
 
 For global memory shared across all groups, read/write `/workspace/project/groups/global/CLAUDE.md`. Only update it when explicitly asked to "remember this globally".
+
+## Token Usage
+
+When asked about token usage, run this query and format the results:
+
+```bash
+sqlite3 /workspace/project/store/messages.db "
+SELECT date,
+       input_tokens + output_tokens AS total_tokens,
+       cache_read_tokens,
+       cache_creation_tokens,
+       request_count
+FROM token_usage
+ORDER BY date DESC
+LIMIT 14;"
+```
+
+Report as a simple table. Flag any day where total_tokens > 50,000 or request_count > 20.
 
 ## Mobility Tracker
 
