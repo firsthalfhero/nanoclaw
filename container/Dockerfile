@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y \
     git \
     python3 \
     python3-pip \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Make python3 available as 'python3' (already is on Debian, but be explicit)

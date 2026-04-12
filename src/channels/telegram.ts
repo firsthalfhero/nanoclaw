@@ -52,7 +52,7 @@ async function transcribeWithGemini(
     const base64Audio = fileBuffer.toString('base64');
     const ext = path.extname(filePath).slice(1).toLowerCase();
     const mimeType =
-      ext === 'ogg' ? 'audio/ogg' : ext === 'mp3' ? 'audio/mpeg' : 'audio/wav';
+      ext === 'ogg' ? 'audio/opus' : ext === 'mp3' ? 'audio/mpeg' : 'audio/wav';
 
     const body = {
       contents: [
@@ -68,16 +68,23 @@ async function transcribeWithGemini(
     };
 
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey,
+        },
         body: JSON.stringify(body),
       },
     );
 
     if (!res.ok) {
-      logger.warn({ status: res.status }, 'Gemini transcription API error');
+      const body = await res.text().catch(() => '(unreadable)');
+      logger.warn(
+        { status: res.status, body },
+        'Gemini transcription API error',
+      );
       return null;
     }
 
@@ -85,6 +92,12 @@ async function transcribeWithGemini(
     const text = (
       json?.candidates?.[0]?.content?.parts?.[0]?.text as string | undefined
     )?.trim();
+    if (!text) {
+      logger.warn(
+        { json: JSON.stringify(json).slice(0, 300) },
+        'Gemini transcription returned empty',
+      );
+    }
     return text || null;
   } catch (err) {
     logger.warn({ err }, 'transcribeWithGemini failed');
@@ -299,11 +312,20 @@ export class TelegramChannel implements Channel {
         const geminiKey =
           process.env.GOOGLE_GEMINI_API_KEY || envVars.GOOGLE_GEMINI_API_KEY;
         if (geminiKey) {
+          logger.info(
+            { dest, mimeHint: 'audio/opus' },
+            'Attempting Gemini voice transcription',
+          );
           const transcript = await transcribeWithGemini(dest, geminiKey);
           if (transcript) {
             storeNonText(ctx, `[Voice transcription: ${transcript}]${caption}`);
             return;
           }
+          logger.warn(
+            'Gemini transcription returned null, falling back to placeholder',
+          );
+        } else {
+          logger.warn('No GOOGLE_GEMINI_API_KEY found, skipping transcription');
         }
 
         storeNonText(ctx, `[Voice: ${containerPath}]`);

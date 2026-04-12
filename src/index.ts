@@ -64,6 +64,8 @@ import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { readEnvFile } from './env.js';
+import { fallbackToGeminiApi } from './gemini-fallback.js';
+import { fallbackToOpenAI } from './openai-fallback.js';
 import {
   restoreRemoteControl,
   startRemoteControl,
@@ -166,38 +168,98 @@ export function _setRegisteredGroups(
  * Process all pending messages for a group.
  * Called by the GroupQueue when it's this group's turn.
  */
-async function fallbackToGemini(prompt: string): Promise<string | null> {
+interface FallbackResult {
+  text: string;
+  model: string;
+}
+
+async function fallbackToGemini(
+  prompt: string,
+): Promise<FallbackResult | null> {
   try {
     const envVars = readEnvFile(['GOOGLE_GEMINI_API_KEY']);
     const geminiKey =
       process.env.GOOGLE_GEMINI_API_KEY || envVars.GOOGLE_GEMINI_API_KEY;
     if (!geminiKey) return null;
 
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-        }),
-      },
-    );
-
-    if (!res.ok) {
-      logger.warn({ status: res.status }, 'Gemini fallback API error');
+    const { result, error } = await fallbackToGeminiApi(prompt, geminiKey);
+    if (!result) {
+      if (error) {
+        logger.warn(
+          {
+            status: error.status,
+            code: error.code,
+            message: error.message,
+          },
+          'Gemini fallback API error',
+        );
+      } else {
+        logger.warn('Gemini fallback API error');
+      }
       return null;
     }
-
-    const json = (await res.json()) as any;
-    const text = (
-      json?.candidates?.[0]?.content?.parts?.[0]?.text as string | undefined
-    )?.trim();
-    return text || null;
+    return result;
   } catch (err) {
     logger.warn({ err }, 'Gemini fallback failed');
     return null;
   }
+}
+
+async function fallbackToChatGPT(
+  prompt: string,
+): Promise<FallbackResult | null> {
+  try {
+    const envVars = readEnvFile(['OPENAI_API_KEY']);
+    const openaiKey = process.env.OPENAI_API_KEY || envVars.OPENAI_API_KEY;
+    if (!openaiKey) return null;
+
+    const { result, error } = await fallbackToOpenAI(prompt, openaiKey);
+    if (!result) {
+      if (error) {
+        logger.warn(
+          {
+            status: error.status,
+            code: error.code,
+            message: error.message,
+          },
+          'ChatGPT fallback API error',
+        );
+      } else {
+        logger.warn('ChatGPT fallback API error');
+      }
+      return null;
+    }
+    return result;
+  } catch (err) {
+    logger.warn({ err }, 'ChatGPT fallback failed');
+    return null;
+  }
+}
+
+/** Try OpenAI then Gemini in order. Returns the first that succeeds. */
+async function tryFallback(prompt: string): Promise<FallbackResult | null> {
+  return (await fallbackToChatGPT(prompt)) ?? (await fallbackToGemini(prompt));
+}
+
+/**
+ * Extract a human-readable error message from a Claude SDK error string.
+ * The SDK embeds JSON like: `... {"type":"error","error":{"message":"..."}}`
+ */
+function extractApiErrorMessage(raw: string): string {
+  try {
+    const jsonStart = raw.indexOf('{');
+    if (jsonStart !== -1) {
+      const parsed = JSON.parse(raw.slice(jsonStart));
+      if (typeof parsed?.error?.message === 'string') {
+        return parsed.error.message;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  // Fall back to first line, capped at 150 chars
+  const first = raw.split('\n')[0].trim();
+  return first.length <= 150 ? first : `${first.slice(0, 150)}...`;
 }
 
 async function processGroupMessages(chatJid: string): Promise<boolean> {
@@ -264,6 +326,34 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   await channel.sendMessage(chatJid, 'Got it, on it...');
   let hadError = false;
   let outputSentToUser = false;
+  let usageLimitHit = false;
+  let apiErrorHit = false;
+  let apiErrorMessage = '';
+
+  // Patterns that indicate Claude's usage cap was hit — intercept and failover
+  const USAGE_LIMIT_PATTERNS = [
+    /you're out of extra usage/i,
+    /out of extra usage/i,
+    /usage.*resets/i,
+    /claude\.ai\/upgrade/i,
+    /you've hit your limit/i,
+    /hit your limit/i,
+    /you.?ve hit/i,
+    // NOTE: do NOT add broad patterns like /limit/i or /resets/i here —
+    // they match normal responses and cause false-positive failovers.
+  ];
+
+  // Patterns that indicate a Claude API-level failure (auth, server error, etc.)
+  // These are returned as result text by the SDK rather than thrown as exceptions.
+  const API_ERROR_PATTERNS = [
+    /failed to authenticate/i,
+    /authentication_error/i,
+    /invalid bearer token/i,
+    /invalid api key/i,
+    /api error.*40[13]/i,
+    /api error.*5\d\d/i,
+    /overloaded_error/i,
+  ];
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
@@ -275,6 +365,41 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
+      logger.info(
+        { group: group.name, text },
+        `Processed text: ${text.slice(0, 200)}`,
+      );
+
+      // Intercept usage-limit messages — don't forward to user, flag for failover
+      const matches = USAGE_LIMIT_PATTERNS.some((p) => p.test(text));
+      logger.info(
+        { group: group.name, text, matches },
+        `Checking patterns for text`,
+      );
+      if (text && matches) {
+        logger.warn(
+          { group: group.name, text },
+          'Claude usage limit hit, flagging for failover',
+        );
+        usageLimitHit = true;
+        // Stop the container immediately so it doesn't consume more IPC
+        // messages and produce a cascade of identical "hit your limit" results.
+        queue.closeStdin(chatJid);
+        return;
+      }
+
+      // Intercept API error messages — don't forward raw SDK error to user
+      if (text && API_ERROR_PATTERNS.some((p) => p.test(text))) {
+        logger.warn(
+          { group: group.name, text },
+          'Claude API error detected, flagging for failover',
+        );
+        apiErrorHit = true;
+        apiErrorMessage = text;
+        queue.closeStdin(chatJid);
+        return;
+      }
+
       if (text) {
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
@@ -295,6 +420,55 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
 
+  if (usageLimitHit && !outputSentToUser) {
+    logger.warn(
+      { group: group.name },
+      'Claude usage limit hit, attempting fallback',
+    );
+    const fallback = await tryFallback(prompt);
+    if (fallback) {
+      logger.info(
+        { group: group.name, model: fallback.model },
+        'Fallback succeeded after usage limit',
+      );
+      await channel.sendMessage(
+        chatJid,
+        `_(Claude usage limit reached. Failed over to ${fallback.model})_\n\n${fallback.text}`,
+      );
+      return true;
+    }
+    await channel.sendMessage(
+      chatJid,
+      "Claude's usage limit has been reached and all fallback services failed. Please try again later.",
+    );
+    return true;
+  }
+
+  if (apiErrorHit && !outputSentToUser) {
+    const cleanError = extractApiErrorMessage(apiErrorMessage);
+    logger.warn(
+      { group: group.name, cleanError },
+      'Claude API error, attempting fallback',
+    );
+    const fallback = await tryFallback(prompt);
+    if (fallback) {
+      logger.info(
+        { group: group.name, model: fallback.model },
+        'Fallback succeeded after API error',
+      );
+      await channel.sendMessage(
+        chatJid,
+        `The Claude API has failed with: ${cleanError}\n\nFailed over to ${fallback.model} and the response is below.\n\n${fallback.text}`,
+      );
+      return true;
+    }
+    await channel.sendMessage(
+      chatJid,
+      `The Claude API has failed with: ${cleanError}\n\nAll fallback services also failed. Please try again later.`,
+    );
+    return true;
+  }
+
   if (output === 'error' || hadError) {
     // If we already sent output to the user, don't roll back the cursor —
     // the user got their response and re-processing would send duplicates.
@@ -306,17 +480,20 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       return true;
     }
 
-    // Claude is down — attempt Gemini fallback before giving up
+    // Claude is down — attempt fallback before giving up
     logger.warn(
       { group: group.name },
-      'Claude agent failed, attempting Gemini fallback',
+      'Claude agent failed, attempting fallback',
     );
-    const geminiResponse = await fallbackToGemini(prompt);
-    if (geminiResponse) {
-      logger.info({ group: group.name }, 'Gemini fallback succeeded');
+    const fallback = await tryFallback(prompt);
+    if (fallback) {
+      logger.info(
+        { group: group.name, model: fallback.model },
+        'Fallback succeeded',
+      );
       await channel.sendMessage(
         chatJid,
-        `_(Claude is unavailable — responding via Gemini)_\n\n${geminiResponse}`,
+        `_(Claude is unavailable. Failed over to ${fallback.model})_\n\n${fallback.text}`,
       );
       return true;
     }
@@ -739,6 +916,18 @@ const isDirectRun =
     new URL(`file://${process.argv[1]}`).pathname;
 
 if (isDirectRun) {
+  // Global safety net: catch any error that escapes explicit try/catch blocks.
+  // Without these, Node.js 15+ exits silently on unhandled rejections, leaving
+  // an empty stderr log with no crash cause recorded.
+  process.on('uncaughtException', (err) => {
+    logger.fatal({ err }, 'Uncaught exception — process exiting');
+    process.exit(1);
+  });
+  process.on('unhandledRejection', (reason) => {
+    logger.fatal({ reason }, 'Unhandled promise rejection — process exiting');
+    process.exit(1);
+  });
+
   main().catch((err) => {
     logger.error({ err }, 'Failed to start NanoClaw');
     process.exit(1);
