@@ -53,6 +53,11 @@ No exceptions: bug fixes, typo patches, version bumps, merge commits — all of 
 - Never use `git reset --hard` on a shared branch.
 - Do not create empty commits.
 
+### Remediation
+
+- If you discover a commit that violates these rules and it has already been pushed, do not rewrite shared history to fix it.
+- Instead, document the issue to the user, correct your workflow immediately, and ensure the next commit fully complies.
+
 ## Graphify
 
 This project has a Graphify knowledge graph at `graphify-out/`.
