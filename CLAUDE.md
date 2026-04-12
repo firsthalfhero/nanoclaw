@@ -63,6 +63,38 @@ To add a new skill env var, add it to the `skillEnv` allowlist in `buildContaine
 
 Reads live state from the mean reversion paper trading engine. Data is mounted read-only into the container via `additionalMounts` on the main group. The host path `C:\Users\George\Documents\projects\mean-reversion-strategy-sandbox\data` is mounted to `/workspace/extra/paper-trader/` in the container. Script reads `/workspace/extra/paper-trader/paper_state.json`.
 
+## Git Rules
+
+These rules are mandatory. Violations make it impossible to audit which AI introduced a change.
+
+### Co-author tag — required on every commit, no exceptions
+
+Every commit must include this trailer in the commit message body:
+
+```text
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+```
+
+No exceptions: bug fixes, typo patches, version bumps — all of them. A commit without this tag will be treated as unattributed.
+
+### Branch and merge rules
+
+- Claude Code may commit directly to `main` for small, self-contained changes.
+- For larger features or anything that touches security/auth/container behavior, create a branch prefixed `CLAUDE-` and open a PR.
+- Never force-push (`--force` / `--force-with-lease`) to `main`.
+- Never bypass hooks (`--no-verify`).
+- Never amend a commit that has already been pushed.
+- Do not create empty commits.
+
+### Identifying AI authorship in git log
+
+- Claude commits: `Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>`
+- Codex commits: `Co-authored-by: Codex <codex@openai.com>`
+- Human-only commits: no co-author trailer
+
+To find all Claude-authored commits: `git log --all --grep="Co-Authored-By: Claude"`  
+To find all Codex-authored commits: `git log --all --grep="Co-authored-by: Codex"`
+
 ## Development
 
 Run commands directly—don't tell the user to run them.

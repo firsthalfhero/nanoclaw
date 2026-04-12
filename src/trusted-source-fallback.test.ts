@@ -39,10 +39,12 @@ describe('trusted-source-fallback', () => {
     });
 
     await expect(
-      fallbackToTrustedSource('Who is the President of the USA?', fetchMock as any),
+      fallbackToTrustedSource(
+        'Who is the President of the USA?',
+        fetchMock as any,
+      ),
     ).resolves.toEqual({
-      text:
-        'According to the White House administration page, the current President of the United States is Donald J Trump.\n\nSource:\nhttps://www.whitehouse.gov/administration/',
+      text: 'According to the White House administration page, the current President of the United States is Donald J Trump.\n\nSource:\nhttps://www.whitehouse.gov/administration/',
       model: 'Trusted source fetch',
     });
   });
@@ -51,7 +53,10 @@ describe('trusted-source-fallback', () => {
     const fetchMock = vi.fn();
 
     await expect(
-      fallbackToTrustedSource('What is the capital of France?', fetchMock as any),
+      fallbackToTrustedSource(
+        'What is the capital of France?',
+        fetchMock as any,
+      ),
     ).resolves.toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });

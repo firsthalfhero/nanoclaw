@@ -80,8 +80,7 @@ export async function fallbackToGeminiApi(
     ),
   );
   const grounded =
-    Boolean(groundingMetadata?.webSearchQueries?.length) &&
-    sources.length > 0;
+    Boolean(groundingMetadata?.webSearchQueries?.length) && sources.length > 0;
 
   if (text && !grounded) {
     return {
