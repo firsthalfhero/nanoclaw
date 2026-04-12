@@ -1,6 +1,7 @@
 export interface GeminiFallbackResult {
   text: string;
   model: string;
+  grounded: boolean;
 }
 
 export interface GeminiFallbackError {
@@ -15,6 +16,9 @@ export interface GeminiFallbackResponse {
 }
 
 type FetchLike = typeof fetch;
+
+const GROUNDING_INSTRUCTION =
+  'Use Google Search grounding for any factual claim that could be time-sensitive or stale. Base the answer on grounded search results. If you cannot verify the answer with grounding, say so.';
 
 export async function fallbackToGeminiApi(
   prompt: string,
@@ -34,7 +38,16 @@ export async function fallbackToGeminiApi(
         'x-goog-api-key': geminiKey,
       },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
+        contents: [
+          {
+            parts: [
+              {
+                text: `${GROUNDING_INSTRUCTION}\n\nUser request: ${prompt}`,
+              },
+            ],
+          },
+        ],
+        tools: [{ google_search: {} }],
       }),
     },
   );
@@ -53,12 +66,28 @@ export async function fallbackToGeminiApi(
   }
 
   const json = (await res.json()) as any;
+  const candidate = json?.candidates?.[0];
   const text = (
-    json?.candidates?.[0]?.content?.parts?.[0]?.text as string | undefined
+    candidate?.content?.parts?.[0]?.text as string | undefined
   )?.trim();
+  const groundingMetadata = candidate?.groundingMetadata;
+  const grounded =
+    Boolean(groundingMetadata?.webSearchQueries?.length) ||
+    Boolean(groundingMetadata?.groundingChunks?.length);
+
+  if (text && !grounded) {
+    return {
+      result: null,
+      error: {
+        status: 200,
+        message:
+          'Gemini returned an ungrounded response for a fallback request that requires fresh web verification.',
+      },
+    };
+  }
 
   return {
-    result: text ? { text, model: 'Gemini 2.5 Flash' } : null,
+    result: text ? { text, model: 'Gemini 2.5 Flash', grounded: true } : null,
     error: null,
   };
 }
