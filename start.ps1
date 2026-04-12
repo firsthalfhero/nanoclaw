@@ -10,7 +10,8 @@ $watchdogLog = "$root\logs\nanoclaw-watchdog.log"
 # Ensure logs dir exists
 New-Item -ItemType Directory -Force -Path "$root\logs" | Out-Null
 
-# Use a lock file to prevent multiple watchdog instances (port check has race condition)
+# Use a lock file to prevent multiple watchdog instances.
+# The lock file stores the PID of the child watchdog-script.ps1 process (not this script).
 $lockFile = "$root\logs\watchdog.lock"
 if (Test-Path $lockFile) {
     $lockPid = Get-Content $lockFile -ErrorAction SilentlyContinue
@@ -20,7 +21,7 @@ if (Test-Path $lockFile) {
         Start-Sleep -Seconds 1
     }
 }
-$PID | Out-File $lockFile -Force
+# Lock file is written after the child watchdog process is started (below), so we have its PID.
 
 # Kill any existing NanoClaw process holding port 3001
 $existing = Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess
@@ -109,11 +110,14 @@ while (`$true) {
 }
 "@ | Out-File -FilePath $watchdogFile -Encoding UTF8 -Force
 
-Start-Process -FilePath "powershell.exe" `
+$watchdogProc = Start-Process -FilePath "powershell.exe" `
     -ArgumentList "-ExecutionPolicy", "Bypass", "-File", $watchdogFile `
-    -NoNewWindow
+    -NoNewWindow -PassThru
 
-Write-Host "NanoClaw watchdog started in background. Check logs at $watchdogLog" -ForegroundColor Green
+# Write the child watchdog PID to the lock file so the next run can kill it cleanly.
+$watchdogProc.Id | Out-File $lockFile -Force
+
+Write-Host "NanoClaw watchdog started in background (PID $($watchdogProc.Id)). Check logs at $watchdogLog" -ForegroundColor Green
 } catch {
     Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
