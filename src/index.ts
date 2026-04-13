@@ -179,7 +179,6 @@ interface FallbackResult {
   model: string;
 }
 
-
 async function fallbackToGemini(
   prompt: string,
 ): Promise<FallbackResult | null> {
@@ -290,7 +289,9 @@ async function runClaudeDirectProviderTest(
     ok: false,
     provider: 'claude',
     model: 'Claude',
-    error: extractApiErrorMessage(text || lastError || 'Claude request failed.'),
+    error: extractApiErrorMessage(
+      text || lastError || 'Claude request failed.',
+    ),
   };
 }
 

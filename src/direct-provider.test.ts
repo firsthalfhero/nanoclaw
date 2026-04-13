@@ -56,7 +56,12 @@ describe('executeDirectProviderRequest', () => {
     expect(runClaude).toHaveBeenCalledWith('write a haiku');
     expect(runOpenAI).not.toHaveBeenCalled();
     expect(runGemini).not.toHaveBeenCalled();
-    expect(result).toEqual({ ok: true, provider: 'claude', model: 'Claude', text: 'ok' });
+    expect(result).toEqual({
+      ok: true,
+      provider: 'claude',
+      model: 'Claude',
+      text: 'ok',
+    });
   });
 
   it('dispatches to openai only', async () => {
@@ -77,7 +82,12 @@ describe('executeDirectProviderRequest', () => {
     expect(runOpenAI).toHaveBeenCalledWith('write a haiku');
     expect(runClaude).not.toHaveBeenCalled();
     expect(runGemini).not.toHaveBeenCalled();
-    expect(result).toEqual({ ok: true, provider: 'openai', model: 'GPT-4', text: 'ok' });
+    expect(result).toEqual({
+      ok: true,
+      provider: 'openai',
+      model: 'GPT-4',
+      text: 'ok',
+    });
   });
 
   it('dispatches to gemini only', async () => {
@@ -98,6 +108,11 @@ describe('executeDirectProviderRequest', () => {
     expect(runGemini).toHaveBeenCalledWith('write a haiku');
     expect(runClaude).not.toHaveBeenCalled();
     expect(runOpenAI).not.toHaveBeenCalled();
-    expect(result).toEqual({ ok: true, provider: 'gemini', model: 'Gemini 2.5 Flash', text: 'ok' });
+    expect(result).toEqual({
+      ok: true,
+      provider: 'gemini',
+      model: 'Gemini 2.5 Flash',
+      text: 'ok',
+    });
   });
 });

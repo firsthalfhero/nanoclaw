@@ -56,4 +56,3 @@ export async function executeDirectProviderRequest(
   }
   return deps.runGemini(request.prompt);
 }
-
