@@ -64,6 +64,11 @@ import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { readEnvFile } from './env.js';
+import {
+  type DirectProviderResult,
+  executeDirectProviderRequest,
+  parseDirectProviderRequest,
+} from './direct-provider.js';
 import { fallbackToGeminiApi } from './gemini-fallback.js';
 import { fallbackToOpenAI } from './openai-fallback.js';
 import { fallbackToTrustedSource } from './trusted-source-fallback.js';
@@ -174,6 +179,7 @@ interface FallbackResult {
   model: string;
 }
 
+
 async function fallbackToGemini(
   prompt: string,
 ): Promise<FallbackResult | null> {
@@ -234,6 +240,144 @@ async function fallbackToChatGPT(
   } catch (err) {
     logger.warn({ err }, 'ChatGPT fallback failed');
     return null;
+  }
+}
+
+function formatProviderError(message: string, code?: string | number): string {
+  return code ? `${message} (${code})` : message;
+}
+
+function stripInternalText(raw: string): string {
+  return raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+}
+
+// Note: Claude runs through the full agent path (system prompt, workspace mounts,
+// conversation history) while OpenAI and Gemini receive the bare user prompt.
+// This is intentional — the command tests provider routing, not response parity.
+async function runClaudeDirectProviderTest(
+  group: RegisteredGroup,
+  prompt: string,
+  chatJid: string,
+): Promise<DirectProviderResult> {
+  const outputs: string[] = [];
+  let lastError = '';
+
+  const status = await runAgent(group, prompt, chatJid, async (result) => {
+    if (result.error) {
+      lastError = result.error;
+    }
+    if (!result.result) return;
+
+    const raw =
+      typeof result.result === 'string'
+        ? result.result
+        : JSON.stringify(result.result);
+    const text = stripInternalText(raw);
+    if (text) outputs.push(text);
+  });
+
+  const text = outputs.join('\n\n').trim();
+  if (status === 'success' && text) {
+    return {
+      ok: true,
+      provider: 'claude',
+      model: 'Claude',
+      text,
+    };
+  }
+
+  return {
+    ok: false,
+    provider: 'claude',
+    model: 'Claude',
+    error: extractApiErrorMessage(text || lastError || 'Claude request failed.'),
+  };
+}
+
+async function runOpenAIDirectProviderTest(
+  prompt: string,
+): Promise<DirectProviderResult> {
+  try {
+    const envVars = readEnvFile(['OPENAI_API_KEY']);
+    const openaiKey = process.env.OPENAI_API_KEY || envVars.OPENAI_API_KEY;
+    if (!openaiKey) {
+      return {
+        ok: false,
+        provider: 'openai',
+        model: 'OpenAI',
+        error: 'OPENAI_API_KEY is not configured.',
+      };
+    }
+
+    const { result, error } = await fallbackToOpenAI(prompt, openaiKey);
+    if (!result) {
+      return {
+        ok: false,
+        provider: 'openai',
+        model: 'OpenAI',
+        error: error
+          ? formatProviderError(error.message, error.code)
+          : 'OpenAI request failed.',
+      };
+    }
+
+    return {
+      ok: true,
+      provider: 'openai',
+      model: result.model,
+      text: result.text,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      provider: 'openai',
+      model: 'OpenAI',
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function runGeminiDirectProviderTest(
+  prompt: string,
+): Promise<DirectProviderResult> {
+  try {
+    const envVars = readEnvFile(['GOOGLE_GEMINI_API_KEY']);
+    const geminiKey =
+      process.env.GOOGLE_GEMINI_API_KEY || envVars.GOOGLE_GEMINI_API_KEY;
+    if (!geminiKey) {
+      return {
+        ok: false,
+        provider: 'gemini',
+        model: 'Gemini',
+        error: 'GOOGLE_GEMINI_API_KEY is not configured.',
+      };
+    }
+
+    const { result, error } = await fallbackToGeminiApi(prompt, geminiKey);
+    if (!result) {
+      return {
+        ok: false,
+        provider: 'gemini',
+        model: 'Gemini',
+        error: error
+          ? formatProviderError(error.message, error.code)
+          : 'Gemini request failed.',
+      };
+    }
+
+    return {
+      ok: true,
+      provider: 'gemini',
+      model: result.model,
+      text: result.text,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      provider: 'gemini',
+      model: 'Gemini',
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
@@ -299,6 +443,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (!hasTrigger) return true;
   }
 
+  const latestMessage = missedMessages[missedMessages.length - 1];
+  const directProviderRequest = latestMessage
+    ? parseDirectProviderRequest(latestMessage.content, ASSISTANT_NAME)
+    : null;
+
   const prompt = formatMessages(missedMessages, TIMEZONE);
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
@@ -312,6 +461,32 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     { group: group.name, messageCount: missedMessages.length },
     'Processing messages',
   );
+
+  if (directProviderRequest) {
+    await channel.setTyping?.(chatJid, true);
+    await channel.sendMessage(chatJid, 'Got it, on it...');
+
+    const result = await executeDirectProviderRequest(directProviderRequest, {
+      runClaude: (providerPrompt) =>
+        runClaudeDirectProviderTest(group, providerPrompt, chatJid),
+      runOpenAI: runOpenAIDirectProviderTest,
+      runGemini: runGeminiDirectProviderTest,
+    });
+
+    await channel.setTyping?.(chatJid, false);
+    if (result.ok) {
+      await channel.sendMessage(
+        chatJid,
+        `_(Direct provider test via ${result.model})_\n\n${result.text}`,
+      );
+    } else {
+      await channel.sendMessage(
+        chatJid,
+        `_(Direct provider test failed: ${result.model})_\n\n${result.error}`,
+      );
+    }
+    return true;
+  }
 
   // Track idle timer for closing stdin when agent is idle
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
