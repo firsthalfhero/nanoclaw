@@ -82,17 +82,6 @@ export async function fallbackToGeminiApi(
   const grounded =
     Boolean(groundingMetadata?.webSearchQueries?.length) && sources.length > 0;
 
-  if (text && !grounded) {
-    return {
-      result: null,
-      error: {
-        status: 200,
-        message:
-          'Gemini returned a response without grounded website sources for a fallback request that requires fresh web verification.',
-      },
-    };
-  }
-
   const sourcedText =
     text && sources.length > 0
       ? `${text}\n\nSources:\n${sources.join('\n')}`
@@ -103,7 +92,7 @@ export async function fallbackToGeminiApi(
       ? {
           text: sourcedText,
           model: 'Gemini 2.5 Flash',
-          grounded: true,
+          grounded,
           sources,
         }
       : null,
