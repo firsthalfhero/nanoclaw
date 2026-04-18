@@ -243,8 +243,10 @@ function buildContainerArgs(
   const skillEnv = readEnvFile([
     'MOTION_API_KEY',
     'MOTION_WORKSPACE_ID',
-    'GOOGLE_CLIENT_ID',
-    'GOOGLE_CLIENT_SECRET',
+    'GOOGLE_CAL_CLIENT_ID',
+    'GOOGLE_CAL_CLIENT_SECRET',
+    'GOOGLE_GMAIL_CLIENT_ID',
+    'GOOGLE_GMAIL_CLIENT_SECRET',
     'BRAVE_API_KEY',
     // Mobility Tracker (Firebase service account JSON)
     'FIREBASE_SERVICE_ACCOUNT',

@@ -63,10 +63,10 @@ def _api_patch(token, path, payload):
 # ── Auth helpers ─────────────────────────────────────────────────────────────
 
 def _get_client():
-    client_id     = os.environ.get("GOOGLE_CLIENT_ID")
-    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
+    client_id     = os.environ.get("GOOGLE_GMAIL_CLIENT_ID")
+    client_secret = os.environ.get("GOOGLE_GMAIL_CLIENT_SECRET")
     if not client_id or not client_secret:
-        print("Error: GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET not set.", file=sys.stderr)
+        print("Error: GOOGLE_GMAIL_CLIENT_ID / GOOGLE_GMAIL_CLIENT_SECRET not set.", file=sys.stderr)
         sys.exit(1)
     return client_id, client_secret
 

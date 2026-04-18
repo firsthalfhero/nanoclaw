@@ -102,10 +102,10 @@ def _api_delete(token, path):
 # ---------------------------------------------------------------------------
 
 def _get_client():
-    client_id = os.environ.get("GOOGLE_CLIENT_ID")
-    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
+    client_id = os.environ.get("GOOGLE_CAL_CLIENT_ID")
+    client_secret = os.environ.get("GOOGLE_CAL_CLIENT_SECRET")
     if not client_id or not client_secret:
-        print("Error: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set.",
+        print("Error: GOOGLE_CAL_CLIENT_ID and GOOGLE_CAL_CLIENT_SECRET must be set.",
               file=sys.stderr)
         sys.exit(1)
     return client_id, client_secret
