@@ -73,31 +73,27 @@ python3 /home/node/.claude/skills/gmail/scripts/gmail.py label-msg <messageId> <
 python3 /home/node/.claude/skills/gmail/scripts/gmail.py profile
 ```
 
-## Re-authentication (token expired or revoked)
+## Re-authentication (token explicitly revoked)
 
-**Always attempt the command first** — do not check env vars or assume the
-token is broken from a previous session. The script handles re-auth
-automatically and will tell you if action is needed.
+**Always attempt the command first** — the token refreshes automatically and
+re-auth is only needed if the token was explicitly revoked in Google Console.
 
-If `gmail.py` exits with code 2 and prints auth instructions, a new
-device-flow auth has been started:
-
-1. Relay the URL and code to the user exactly as printed.
-2. Wait for the user to confirm they have completed the auth.
-3. Run `auth-complete` to finish and save the new token:
+If the token is revoked, Google blocks Gmail from device flow, so re-auth
+requires a browser on the host machine. Tell the user to run this on their
+Windows host (not inside the container):
 
 ```bash
-python3 /home/node/.claude/skills/gmail/scripts/gmail.py auth-complete
+python container/skills/gmail/scripts/auth_setup_gmail.py
 ```
 
-4. Once that succeeds, retry the original operation.
-
-Do **not** tell the user to run scripts themselves or to check docker-compose
-or any config files — handle it entirely through the above flow.
+This opens a browser, completes the OAuth flow, and saves a new token to
+`groups/main/.gmail-token.json`. Once done, the next Gmail command will work.
 
 ## Notes
 
 - OAuth token is stored at `/workspace/group/.gmail-token.json`
 - Env vars required: `GOOGLE_GMAIL_CLIENT_ID` and `GOOGLE_GMAIL_CLIENT_SECRET`
   (injected automatically by NanoClaw — do not look for `GOOGLE_CLIENT_ID`)
-- The OAuth client type must be "Desktop app" (not TV/device flow)
+- Google blocks Gmail scopes from device flow — initial auth requires a browser and must
+  be run on the host via `auth_setup_gmail.py`. Token refresh works automatically in the
+  container without a browser, so re-auth should be rare (only if token is explicitly revoked)

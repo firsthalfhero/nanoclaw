@@ -27,14 +27,14 @@ SCOPE        = " ".join([
 ])
 PORT = 8766
 
-client_id     = os.environ.get("GOOGLE_CLIENT_ID", "")
-client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+client_id     = os.environ.get("GOOGLE_GMAIL_CLIENT_ID", "")
+client_secret = os.environ.get("GOOGLE_GMAIL_CLIENT_SECRET", "")
 
 if not client_id or not client_secret:
-    print("Error: set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your environment.")
+    print("Error: set GOOGLE_GMAIL_CLIENT_ID and GOOGLE_GMAIL_CLIENT_SECRET in your environment.")
     print("\nIn PowerShell:")
-    print('  $env:GOOGLE_CLIENT_ID="your-client-id"')
-    print('  $env:GOOGLE_CLIENT_SECRET="your-client-secret"')
+    print('  $env:GOOGLE_GMAIL_CLIENT_ID="your-client-id"')
+    print('  $env:GOOGLE_GMAIL_CLIENT_SECRET="your-client-secret"')
     sys.exit(1)
 
 REDIRECT_URI = f"http://localhost:{PORT}"
@@ -83,5 +83,5 @@ except urllib.error.HTTPError as e:
 tok["expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=tok.get("expires_in",3600))).isoformat()
 os.makedirs(os.path.dirname(TOKEN_PATH), exist_ok=True)
 with open(TOKEN_PATH, "w") as f: json.dump(tok, f, indent=2)
-print(f"\n✅ Token saved to:\n  {TOKEN_PATH}")
+print(f"\nToken saved to:\n  {TOKEN_PATH}")
 print("Gmail is ready!")
