@@ -31,6 +31,14 @@ if ($existing) {
     Start-Sleep -Seconds 2
 }
 
+# Force-kill any running agent containers before starting fresh
+# (docker stop is graceful with 10s timeout; docker kill is instant)
+$containers = & docker ps -q --filter name=nanoclaw- 2>$null
+if ($containers) {
+    Write-Host "Killing running agent containers..." -ForegroundColor Yellow
+    $containers | ForEach-Object { & docker kill $_ 2>$null | Out-Null }
+}
+
 # Build first
 Push-Location $root
 Write-Host "Building NanoClaw..." -ForegroundColor Yellow

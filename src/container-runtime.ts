@@ -57,9 +57,14 @@ export function readonlyMountArgs(
   return ['-v', `${hostPath}:${containerPath}:ro`];
 }
 
-/** Returns the shell command to stop a container by name. */
+/** Returns the shell command to stop a container by name (graceful, for timeout handling). */
 export function stopContainer(name: string): string {
   return `${CONTAINER_RUNTIME_BIN} stop ${name}`;
+}
+
+/** Returns the shell command to force-kill a container by name (instant SIGKILL). */
+export function killContainer(name: string): string {
+  return `${CONTAINER_RUNTIME_BIN} kill ${name}`;
 }
 
 /** Ensure the container runtime is running, starting it if needed. */
@@ -110,7 +115,7 @@ export function cleanupOrphans(): void {
     const orphans = output.trim().split('\n').filter(Boolean);
     for (const name of orphans) {
       try {
-        execSync(stopContainer(name), { stdio: 'pipe' });
+        execSync(killContainer(name), { stdio: 'pipe' });
       } catch {
         /* already stopped */
       }
