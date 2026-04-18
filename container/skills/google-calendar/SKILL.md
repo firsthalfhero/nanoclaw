@@ -10,9 +10,9 @@ metadata:
         "requires":
           {
             "bins": ["python3"],
-            "env": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"],
+            "env": ["GOOGLE_CAL_CLIENT_ID", "GOOGLE_CAL_CLIENT_SECRET"],
           },
-        "primaryEnv": "GOOGLE_CLIENT_ID",
+        "primaryEnv": "GOOGLE_CAL_CLIENT_ID",
       },
   }
 ---
@@ -110,8 +110,10 @@ python3 /home/node/.claude/skills/google-calendar/scripts/gcal.py list --calenda
 
 ## Re-authentication (token expired or revoked)
 
-**Always attempt the command first** — do not assume the token is still broken from a
-previous session. The script handles re-auth automatically.
+**Always attempt the command first** — do not check env vars or assume the token
+is still broken from a previous session. The script handles re-auth automatically.
+Do not look for `GOOGLE_CLIENT_ID` — the correct env var is `GOOGLE_CAL_CLIENT_ID`,
+injected automatically by NanoClaw.
 
 If `gcal.py` exits with code 2 and prints auth instructions, it means the refresh
 token was revoked and a new device-flow auth has been started:
