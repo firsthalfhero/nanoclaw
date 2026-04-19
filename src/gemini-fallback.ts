@@ -25,10 +25,20 @@ export async function fallbackToGeminiApi(
   prompt: string,
   geminiKey: string,
   fetchImpl: FetchLike = fetch,
+  assistantName?: string,
 ): Promise<GeminiFallbackResponse> {
   if (!geminiKey) {
     return { result: null, error: null };
   }
+
+  const name = assistantName || 'Pip';
+  const systemInstruction = `You are ${name}, a personal AI assistant running inside NanoClaw — a private messaging assistant that operates via Telegram. Claude (your primary model) is temporarily unavailable, so you are covering.
+
+Respond as ${name} would: concise, helpful, personal. Do NOT give generic help-center instructions. Do NOT tell the user to visit websites or set up accounts — they are talking to their personal assistant, not a support bot.
+
+Formatting rules: no markdown headings (##). Use *bold* (single asterisks), bullets (•), and code blocks only. Keep responses short.
+
+${GROUNDING_INSTRUCTION}`;
 
   const res = await fetchImpl(
     'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
@@ -39,13 +49,12 @@ export async function fallbackToGeminiApi(
         'x-goog-api-key': geminiKey,
       },
       body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: systemInstruction }],
+        },
         contents: [
           {
-            parts: [
-              {
-                text: `${GROUNDING_INSTRUCTION}\n\nUser request: ${prompt}`,
-              },
-            ],
+            parts: [{ text: prompt }],
           },
         ],
         tools: [{ google_search: {} }],

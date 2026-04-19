@@ -188,7 +188,12 @@ async function fallbackToGemini(
       process.env.GOOGLE_GEMINI_API_KEY || envVars.GOOGLE_GEMINI_API_KEY;
     if (!geminiKey) return null;
 
-    const { result, error } = await fallbackToGeminiApi(prompt, geminiKey);
+    const { result, error } = await fallbackToGeminiApi(
+      prompt,
+      geminiKey,
+      fetch,
+      ASSISTANT_NAME,
+    );
     if (!result) {
       if (error) {
         logger.warn(
