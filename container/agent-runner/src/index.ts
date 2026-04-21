@@ -405,7 +405,6 @@ async function runQuery(
     prompt: stream,
     options: {
       cwd: '/workspace/group',
-      model: sdkEnv['__ANTHROPIC_MODEL__'] as string | undefined,
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
