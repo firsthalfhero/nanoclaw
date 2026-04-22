@@ -468,12 +468,14 @@ async function runQuery(
       const resultMsg = message as any;
       const textResult = resultMsg.result ? String(resultMsg.result).slice(0, 200) : null;
       const errorInfo = resultMsg.error ? String(resultMsg.error).slice(0, 500) : null;
+      const isError = resultMsg.subtype === 'error_during_execution' || !!errorInfo;
+      const status = isError ? 'error' : 'success';
       const subtype = message.subtype || 'unknown';
       log(`Result #${resultCount}: subtype=${subtype}${textResult ? ` text=${textResult}` : ''}${errorInfo ? ` error=${errorInfo}` : ''}`);
       
       // Forward error details in the output so the orchestrator can log them
       writeOutput({
-        status: 'success',
+        status,
         result: textResult || null,
         newSessionId,
         error: errorInfo || undefined,
