@@ -126,12 +126,13 @@ while (`$true) {
     }
 
     Write-WatchdogLog "Starting NanoClaw..."
-    `$proc = Start-Process -FilePath "node" `
-        -ArgumentList "dist/index.js" `
-        -WorkingDirectory `$root `
-        -RedirectStandardOutput `$outLog `
-        -RedirectStandardError `$errLog `
-        -NoNewWindow -PassThru
+    `$proc = Start-Process -FilePath "node" -ArgumentList "dist/index.js" -WorkingDirectory `$root -RedirectStandardOutput `$outLog -RedirectStandardError `$errLog -NoNewWindow -PassThru
+
+    if (-not `$proc) {
+        Write-WatchdogLog "ERROR: Start-Process failed to create process"
+        Start-Sleep -Seconds 5
+        continue
+    }
 
     Write-WatchdogLog "NanoClaw running (PID `$(`$proc.Id))"
     `$proc.WaitForExit()
