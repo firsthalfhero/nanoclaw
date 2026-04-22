@@ -11,7 +11,7 @@ $watchdogLog = "$root\logs\nanoclaw-watchdog.log"
 
 function Write-WatchdogLog($msg) {
     $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    "$ts $msg" | Tee-Object -FilePath $watchdogLog -Append | Out-Null
+    "$ts $msg" | Out-File -FilePath $watchdogLog -Append
 }
 
 function Show-CompiledProxyCheck {
@@ -81,6 +81,14 @@ if (-not $buildSuccess) {
     exit 1
 }
 Write-Host "Build succeeded." -ForegroundColor Green
+
+# Verify build output exists
+$agentEntry = "$root\dist\index.js"
+if (-not (Test-Path $agentEntry)) {
+    Write-Host "Build error: dist/index.js not found" -ForegroundColor Red
+    exit 1
+}
+
 if ($Debug) { Show-CompiledProxyCheck }
 
 Write-Host "Starting NanoClaw watchdog..." -ForegroundColor Cyan
@@ -118,11 +126,11 @@ while (`$true) {
     }
 
     Write-WatchdogLog "Starting NanoClaw..."
-    `$proc = Start-Process -FilePath "node" ``
-        -ArgumentList "dist/index.js" ``
-        -WorkingDirectory `$root ``
-        -RedirectStandardOutput `$outLog ``
-        -RedirectStandardError `$errLog ``
+    `$proc = Start-Process -FilePath "node" `
+        -ArgumentList "dist/index.js" `
+        -WorkingDirectory `$root `
+        -RedirectStandardOutput `$outLog `
+        -RedirectStandardError `$errLog `
         -NoNewWindow -PassThru
 
     Write-WatchdogLog "NanoClaw running (PID `$(`$proc.Id))"
@@ -135,7 +143,7 @@ while (`$true) {
 $watchdogContent | Out-File -FilePath $watchdogFile -Encoding UTF8 -Force
 
 $watchdogProc = Start-Process -FilePath "powershell.exe" `
-    -ArgumentList "-ExecutionPolicy", "Bypass", "-File", $watchdogFile `
+    -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $watchdogFile `
     -NoNewWindow -PassThru
 
 # Write the child watchdog PID to the lock file so the next run can kill it cleanly.
