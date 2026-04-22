@@ -111,6 +111,7 @@ export class TelegramChannel implements Channel {
   private bot: Bot | null = null;
   private opts: TelegramChannelOpts;
   private botToken: string;
+  private botUsername: string | null = null; // cached bot username
 
   constructor(botToken: string, opts: TelegramChannelOpts) {
     this.botToken = botToken;
@@ -167,26 +168,6 @@ export class TelegramChannel implements Channel {
           ? senderName
           : (ctx.chat as any).title || chatJid;
 
-      // Translate Telegram @bot_username mentions into TRIGGER_PATTERN format.
-      // Telegram @mentions (e.g., @andy_ai_bot) won't match TRIGGER_PATTERN
-      // (e.g., ^@Andy\b), so we prepend the trigger when the bot is @mentioned.
-      const botUsername = ctx.me?.username?.toLowerCase();
-      if (botUsername) {
-        const entities = ctx.message.entities || [];
-        const isBotMentioned = entities.some((entity) => {
-          if (entity.type === 'mention') {
-            const mentionText = content
-              .substring(entity.offset, entity.offset + entity.length)
-              .toLowerCase();
-            return mentionText === `@${botUsername}`;
-          }
-          return false;
-        });
-        if (isBotMentioned && !TRIGGER_PATTERN.test(content)) {
-          content = `@${ASSISTANT_NAME} ${content}`;
-        }
-      }
-
       // Store chat metadata for discovery
       const isGroup =
         ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
@@ -198,12 +179,56 @@ export class TelegramChannel implements Channel {
         isGroup,
       );
 
-      // Only deliver full message for registered groups
+      // Only deliver messages for registered groups
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) {
         logger.debug(
           { chatJid, chatName },
           'Message from unregistered Telegram chat',
+        );
+        return;
+      }
+
+      // --- Trigger handling ---
+      // If the group requires a trigger, ensure the message starts with the trigger pattern.
+      // We support two ways the bot can be addressed:
+      // 1. User types the trigger word explicitly (e.g., "@Andy ...")
+      // 2. User mentions the bot via @username (Telegram mention entity)
+      // If neither is present and the group requires a trigger, drop the message.
+      const requiresTrigger = group.requiresTrigger !== false; // default true
+      let hasTrigger = TRIGGER_PATTERN.test(content);
+
+      if (!hasTrigger && requiresTrigger) {
+        // Check if the bot is mentioned via @username (mention or text_mention entities)
+        const botUsername = this.botUsername || ctx.me?.username?.toLowerCase();
+        const entities = ctx.message.entities || [];
+
+        const isBotMentioned = entities.some((entity) => {
+          if (entity.type === 'mention') {
+            const mentionText = content
+              .substring(entity.offset, entity.offset + entity.length)
+              .toLowerCase();
+            return mentionText === `@${botUsername}`;
+          }
+          if (entity.type === 'text_mention') {
+            // text_mention has a user object; check if it's our bot
+            const mentionedUser = (entity as any).user;
+            return mentionedUser?.username?.toLowerCase() === botUsername;
+          }
+          return false;
+        });
+
+        if (isBotMentioned) {
+          // Prepend the trigger so the agent sees a consistent format
+          content = `@${ASSISTANT_NAME} ${content}`;
+          hasTrigger = true;
+        }
+      }
+
+      if (requiresTrigger && !hasTrigger) {
+        logger.debug(
+          { chatJid, content: content.slice(0, 100) },
+          'Telegram message ignored: no trigger word and group requires trigger',
         );
         return;
       }
@@ -220,7 +245,7 @@ export class TelegramChannel implements Channel {
       });
 
       logger.info(
-        { chatJid, chatName, sender: senderName },
+        { chatJid, chatName, sender: senderName, hasTrigger },
         'Telegram message stored',
       );
     });
@@ -248,6 +273,8 @@ export class TelegramChannel implements Channel {
         'telegram',
         isGroup,
       );
+
+      // For non-text, we also apply trigger logic? Usually media messages are assumed addressed to bot if sent in a group where bot is a member. But we can be consistent: if group requires trigger, we should check if the message is intended for the bot. However, Telegram doesn't have a "trigger" concept for media; the bot is simply mentioned by being in the conversation? Actually, in groups, bots receive all messages unless they are muted or privacy mode is enabled. Telegram bots have a "privacy mode" that by default prevents them from seeing all messages. But if privacy mode is disabled, they get all messages. The bot might be set to receive only messages that mention it. That's a bot setting. Our code can't control that. So we assume the bot is configured to receive only relevant messages. For simplicity, we'll forward all media from registered groups, as the bot likely only gets mentioned media. But we could also apply the same trigger check if needed. For now, keep as-is.
       this.opts.onMessage(chatJid, {
         id: ctx.message.message_id.toString(),
         chat_jid: chatJid,
@@ -391,11 +418,13 @@ export class TelegramChannel implements Channel {
     });
 
     // Start polling — returns a Promise that resolves when started
-    return new Promise<void>((resolve) => {
+    return new Promise<void>((resolve, reject) => {
       this.bot!.start({
-        onStart: (botInfo) => {
+        onStart: async (botInfo) => {
+          // Cache the bot's username for mention detection (works even if ctx.me is not set yet)
+          this.botUsername = botInfo.username?.toLowerCase() || null;
           logger.info(
-            { username: botInfo.username, id: botInfo.id },
+            { username: botInfo.username, id: botInfo.id, cachedUsername: this.botUsername },
             'Telegram bot connected',
           );
           console.log(`\n  Telegram bot: @${botInfo.username}`);
@@ -403,6 +432,10 @@ export class TelegramChannel implements Channel {
             `  Send /chatid to the bot to get a chat's registration ID\n`,
           );
           resolve();
+        },
+        onError: (err) => {
+          logger.error({ err: err.message }, 'Telegram bot start error');
+          reject(err);
         },
       });
     });
