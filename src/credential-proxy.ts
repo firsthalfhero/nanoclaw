@@ -97,10 +97,14 @@ export function startCredentialProxy(
     'ANTHROPIC_BASE_URL',
     'OPENROUTER_API_KEY',
     'OPENROUTER_MODEL',
+    'OPENROUTER_REFERER',
+    'OPENROUTER_TITLE',
   ]);
 
   const openrouterKey = secrets['OPENROUTER_API_KEY'];
   const openrouterModel = secrets['OPENROUTER_MODEL'];
+  const openrouterReferer = secrets['OPENROUTER_REFERER'];
+  const openrouterTitle = secrets['OPENROUTER_TITLE'];
   const useOpenRouter = !!(openrouterKey && openrouterModel);
 
   const authMode: AuthMode = secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
@@ -146,6 +150,15 @@ export function startCredentialProxy(
           delete headers['x-api-key'];
           delete headers['authorization'];
           headers['authorization'] = `Bearer ${openrouterKey}`;
+
+          // OpenRouter requires either HTTP-Referer or X-Title for routing/identification
+          if (openrouterReferer) {
+            headers['HTTP-Referer'] = openrouterReferer;
+          }
+          if (openrouterTitle) {
+            headers['X-Title'] = openrouterTitle;
+          }
+
           // Translate Anthropic /v1/messages body → OpenAI /v1/chat/completions format
           if (isMessagesEndpoint && req.method === 'POST' && body.length > 0) {
             try {
