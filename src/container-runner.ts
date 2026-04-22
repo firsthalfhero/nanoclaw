@@ -206,6 +206,9 @@ function buildContainerArgs(
 
   if (useOpenRouter) {
     args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+    // Pass model name into the container so agent-runner knows to disable session resumption.
+    // The API key stays on the host (proxy handles auth) — only the model string is needed.
+    args.push('-e', `OPENROUTER_MODEL=${openrouterEnv['OPENROUTER_MODEL']}`);
   } else {
     const authMode = detectAuthMode();
     if (authMode === 'api-key') {

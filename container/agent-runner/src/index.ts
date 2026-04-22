@@ -84,7 +84,8 @@ const IPC_POLL_MS = 500;
  * causes error_during_execution with zero tokens and an empty errors array.
  */
 function isOpenRouterMode(): boolean {
-  return !!(process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_MODEL);
+  // Only OPENROUTER_MODEL is injected into containers (the API key lives in the host proxy).
+  return !!process.env.OPENROUTER_MODEL;
 }
 
 /**
