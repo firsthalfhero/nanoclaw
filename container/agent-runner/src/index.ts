@@ -483,6 +483,16 @@ async function runQuery(
         }
       } else if (resultMsg.message && resultMsg.subtype !== 'success') {
         errorInfo = resultMsg.message;
+      } else if (resultMsg.errors && Array.isArray(resultMsg.errors) && resultMsg.errors.length > 0) {
+        // Handle the `errors` array from the SDK
+        const firstError = resultMsg.errors[0];
+        if (typeof firstError === 'string') {
+          errorInfo = firstError;
+        } else if (firstError && typeof firstError === 'object') {
+          errorInfo = firstError.message || JSON.stringify(firstError);
+        } else {
+          errorInfo = JSON.stringify(resultMsg.errors);
+        }
       }
       
       const isError = resultMsg.subtype === 'error_during_execution' || !!errorInfo;
