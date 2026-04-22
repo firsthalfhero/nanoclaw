@@ -123,6 +123,9 @@ export function startCredentialProxy(
 
   if (useOpenRouter) {
     logger.info({ model: openrouterModel }, 'Credential proxy: OpenRouter mode active');
+    if (!openrouterReferer && !openrouterTitle) {
+      logger.warn('OpenRouter mode active but neither OPENROUTER_REFERER nor OPENROUTER_TITLE is set — requests may be rejected by OpenRouter');
+    }
   }
 
   return new Promise((resolve, reject) => {
@@ -151,9 +154,11 @@ export function startCredentialProxy(
           delete headers['authorization'];
           headers['authorization'] = `Bearer ${openrouterKey}`;
 
-          // OpenRouter requires either HTTP-Referer or X-Title for routing/identification
+          // OpenRouter requires either Referer or X-Title for routing/identification
+          delete headers['referer'];
+          delete headers['Referer'];
           if (openrouterReferer) {
-            headers['HTTP-Referer'] = openrouterReferer;
+            headers['Referer'] = openrouterReferer;
           }
           if (openrouterTitle) {
             headers['X-Title'] = openrouterTitle;
