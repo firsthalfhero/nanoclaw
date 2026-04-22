@@ -465,12 +465,18 @@ async function runQuery(
 
     if (message.type === 'result') {
       resultCount++;
-      const textResult = 'result' in message ? (message as { result?: string }).result : null;
-      log(`Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
+      const resultMsg = message as any;
+      const textResult = resultMsg.result ? String(resultMsg.result).slice(0, 200) : null;
+      const errorInfo = resultMsg.error ? String(resultMsg.error).slice(0, 500) : null;
+      const subtype = message.subtype || 'unknown';
+      log(`Result #${resultCount}: subtype=${subtype}${textResult ? ` text=${textResult}` : ''}${errorInfo ? ` error=${errorInfo}` : ''}`);
+      
+      // Forward error details in the output so the orchestrator can log them
       writeOutput({
         status: 'success',
         result: textResult || null,
-        newSessionId
+        newSessionId,
+        error: errorInfo || undefined,
       });
     }
   }
