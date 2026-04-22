@@ -403,6 +403,7 @@ async function runQuery(
 
   let newSessionId: string | undefined;
   let lastAssistantUuid: string | undefined;
+  let lastAssistantText = '';
   let messageCount = 0;
   let resultCount = 0;
 
@@ -471,8 +472,18 @@ async function runQuery(
     const msgType = message.type === 'system' ? `system/${(message as { subtype?: string }).subtype}` : message.type;
     log(`[msg #${messageCount}] type=${msgType}`);
 
-    if (message.type === 'assistant' && 'uuid' in message) {
-      lastAssistantUuid = (message as { uuid: string }).uuid;
+    if (message.type === 'assistant') {
+      if ('uuid' in message) lastAssistantUuid = (message as { uuid: string }).uuid;
+      // Collect text content from assistant messages as fallback for models
+      // (e.g. via OpenRouter) that don't populate the SDK result field.
+      const content = (message as any).message?.content;
+      if (Array.isArray(content)) {
+        const text = content
+          .filter((b: any) => b.type === 'text')
+          .map((b: any) => b.text ?? '')
+          .join('');
+        if (text.trim()) lastAssistantText = text.trim();
+      }
     }
 
     if (message.type === 'system' && message.subtype === 'init') {
@@ -491,7 +502,10 @@ async function runQuery(
       // Log the full result message structure for debugging
       log(`Result message full: ${JSON.stringify(resultMsg)}`);
       
-      const textResult = resultMsg.result ? String(resultMsg.result).slice(0, 200) : null;
+      // Use SDK result field; fall back to last assistant text for models
+      // (e.g. via OpenRouter) that don't populate the result field directly.
+      const sdkResult = resultMsg.result ? String(resultMsg.result) : '';
+      const textResult = sdkResult || lastAssistantText || null;
       
       // Extract error from multiple possible fields
       let errorInfo: string | null = null;
