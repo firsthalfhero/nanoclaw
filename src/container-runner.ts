@@ -223,22 +223,22 @@ function buildContainerArgs(
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // OpenRouter mode: bypass credential proxy, route directly to OpenRouter.
-  // Both vars must be set; if either is missing fall through to default.
-  const openrouterEnv = readEnvFile(['OPENROUTER_API_KEY', 'OPENROUTER_MODEL']);
-  const openrouterKey = openrouterEnv['OPENROUTER_API_KEY'];
-  const openrouterModel = openrouterEnv['OPENROUTER_MODEL'];
+  // Route API traffic through the credential proxy (containers never see real secrets).
+  // The proxy handles OpenRouter rewriting transparently when OPENROUTER_API_KEY
+  // and OPENROUTER_MODEL are set — no special container config needed.
+  args.push(
+    '-e',
+    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+  );
 
-  if (openrouterKey && openrouterModel) {
-    args.push('-e', 'ANTHROPIC_BASE_URL=https://openrouter.ai/api/v1');
-    args.push('-e', `ANTHROPIC_AUTH_TOKEN=${openrouterKey}`);
-    args.push('-e', `__ANTHROPIC_MODEL__=${openrouterModel}`);
+  // When OpenRouter is active, force API key mode so Claude Code uses x-api-key
+  // (no OAuth token exchange). The proxy substitutes Bearer auth for OpenRouter.
+  const openrouterEnv = readEnvFile(['OPENROUTER_API_KEY', 'OPENROUTER_MODEL']);
+  const useOpenRouter = !!(openrouterEnv['OPENROUTER_API_KEY'] && openrouterEnv['OPENROUTER_MODEL']);
+
+  if (useOpenRouter) {
+    args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
   } else {
-    // Route API traffic through the credential proxy (containers never see real secrets)
-    args.push(
-      '-e',
-      `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
-    );
     // Mirror the host's auth method with a placeholder value.
     // API key mode: SDK sends x-api-key, proxy replaces with real key.
     // OAuth mode:   SDK exchanges placeholder token for temp API key,
