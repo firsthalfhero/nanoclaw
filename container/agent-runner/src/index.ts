@@ -79,6 +79,15 @@ const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
 
 /**
+ * Detect whether we are routing through OpenRouter.
+ * OpenRouter does not support Claude session resumption — passing a session ID
+ * causes error_during_execution with zero tokens and an empty errors array.
+ */
+function isOpenRouterMode(): boolean {
+  return !!(process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_MODEL);
+}
+
+/**
  * Push-based async iterable for streaming user messages to the SDK.
  * Keeps the iterable alive until end() is called, preventing isSingleUserTurn.
  */
@@ -348,6 +357,11 @@ function waitForIpcMessage(): Promise<string | null> {
  * Uses MessageStream (AsyncIterable) to keep isSingleUserTurn=false,
  * allowing agent teams subagents to run to completion.
  * Also pipes IPC messages into the stream during the query.
+ *
+ * NOTE: When using OpenRouter, session resumption is disabled because
+ * OpenRouter does not support the Claude session resume protocol. Passing
+ * a session ID to OpenRouter causes error_during_execution with zero tokens
+ * and an empty errors array — a silent failure that is very hard to diagnose.
  */
 async function runQuery(
   prompt: string | ContentBlock[],
@@ -357,6 +371,12 @@ async function runQuery(
   sdkEnv: Record<string, string | undefined>,
   resumeAt?: string,
 ): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean }> {
+  const openRouterMode = isOpenRouterMode();
+
+  if (openRouterMode && sessionId) {
+    log(`OpenRouter mode detected — disabling session resume (session ${sessionId} will not be resumed)`);
+  }
+
   const stream = new MessageStream();
   stream.push(prompt);
 
@@ -410,8 +430,9 @@ async function runQuery(
     options: {
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
-      resume: sessionId,
-      resumeSessionAt: resumeAt,
+      // OpenRouter does not support session resumption — omit resume entirely
+      resume: openRouterMode ? undefined : sessionId,
+      resumeSessionAt: openRouterMode ? undefined : resumeAt,
       systemPrompt: globalClaudeMd
         ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
         : undefined,
@@ -568,6 +589,13 @@ async function main(): Promise<void> {
     try { fs.unlinkSync('/tmp/input.json'); } catch { /* may not exist */ }
     log(`Received input for group: ${containerInput.groupFolder}`);
     log(`Input details: chatJid=${containerInput.chatJid}, isMain=${containerInput.isMain}, isScheduledTask=${containerInput.isScheduledTask}, sessionId=${containerInput.sessionId || 'new'}`);
+
+    // Log OpenRouter mode at startup so it's visible in every container run
+    if (isOpenRouterMode()) {
+      log(`OpenRouter mode: model=${process.env.OPENROUTER_MODEL} (session resumption disabled)`);
+    } else {
+      log(`Direct Anthropic mode (session resumption enabled)`);
+    }
   } catch (err) {
     writeOutput({
       status: 'error',
