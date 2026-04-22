@@ -419,25 +419,26 @@ export class TelegramChannel implements Channel {
 
     // Start polling — returns a Promise that resolves when started
     return new Promise<void>((resolve, reject) => {
-      this.bot!.start({
-        onStart: async (botInfo) => {
-          // Cache the bot's username for mention detection (works even if ctx.me is not set yet)
-          this.botUsername = botInfo.username?.toLowerCase() || null;
-          logger.info(
-            { username: botInfo.username, id: botInfo.id, cachedUsername: this.botUsername },
-            'Telegram bot connected',
-          );
-          console.log(`\n  Telegram bot: @${botInfo.username}`);
-          console.log(
-            `  Send /chatid to the bot to get a chat's registration ID\n`,
-          );
-          resolve();
-        },
-        onError: (err) => {
+      this.bot!
+        .start({
+          onStart: async (botInfo) => {
+            // Cache the bot's username for mention detection (works even if ctx.me is not set yet)
+            this.botUsername = botInfo.username?.toLowerCase() || null;
+            logger.info(
+              { username: botInfo.username, id: botInfo.id, cachedUsername: this.botUsername },
+              'Telegram bot connected',
+            );
+            console.log(`\n  Telegram bot: @${botInfo.username}`);
+            console.log(
+              `  Send /chatid to the bot to get a chat's registration ID\n`,
+            );
+            resolve();
+          },
+        })
+        .catch((err) => {
           logger.error({ err: err.message }, 'Telegram bot start error');
           reject(err);
-        },
-      });
+        });
     });
   }
 
