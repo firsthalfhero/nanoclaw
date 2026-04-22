@@ -16,6 +16,7 @@ import { request as httpRequest, RequestOptions } from 'http';
 
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
+import { translateRequestBody, translateResponseBody, StreamTranslator } from './openrouter-translate.js';
 
 export type AuthMode = 'api-key' | 'oauth';
 
@@ -94,24 +95,38 @@ export function startCredentialProxy(
     'CLAUDE_CODE_OAUTH_TOKEN',
     'ANTHROPIC_AUTH_TOKEN',
     'ANTHROPIC_BASE_URL',
+    'OPENROUTER_API_KEY',
+    'OPENROUTER_MODEL',
   ]);
+
+  const openrouterKey = secrets['OPENROUTER_API_KEY'];
+  const openrouterModel = secrets['OPENROUTER_MODEL'];
+  const useOpenRouter = !!(openrouterKey && openrouterModel);
 
   const authMode: AuthMode = secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
   const oauthToken =
     secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.ANTHROPIC_AUTH_TOKEN;
 
-  const upstreamUrl = new URL(
-    secrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
-  );
+  // OpenRouter's Anthropic-compat endpoint lives under /api (i.e. /api/v1/messages).
+  // Setting the base to openrouter.ai/api means the container's /v1/messages path
+  // gets prepended with /api by the pathPrefix logic below.
+  const upstreamBase = useOpenRouter
+    ? 'https://openrouter.ai/api'
+    : secrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
+  const upstreamUrl = new URL(upstreamBase);
   const isHttps = upstreamUrl.protocol === 'https:';
   const makeRequest = isHttps ? httpsRequest : httpRequest;
+
+  if (useOpenRouter) {
+    logger.info({ model: openrouterModel }, 'Credential proxy: OpenRouter mode active');
+  }
 
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       const chunks: Buffer[] = [];
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {
-        const body = Buffer.concat(chunks);
+        let body = Buffer.concat(chunks);
         const headers: Record<string, string | number | string[] | undefined> =
           {
             ...(req.headers as Record<string, string>),
@@ -124,7 +139,26 @@ export function startCredentialProxy(
         delete headers['keep-alive'];
         delete headers['transfer-encoding'];
 
-        if (authMode === 'api-key') {
+        const isMessagesEndpoint = req.url?.includes('/v1/messages');
+
+        if (useOpenRouter) {
+          // OpenRouter uses Bearer auth (not x-api-key)
+          delete headers['x-api-key'];
+          delete headers['authorization'];
+          headers['authorization'] = `Bearer ${openrouterKey}`;
+          // Translate Anthropic /v1/messages body → OpenAI /v1/chat/completions format
+          if (isMessagesEndpoint && req.method === 'POST' && body.length > 0) {
+            try {
+              const anthropicJson = JSON.parse(body.toString('utf-8'));
+              const openaiJson = translateRequestBody(anthropicJson, openrouterModel!);
+              body = Buffer.from(JSON.stringify(openaiJson), 'utf-8');
+              headers['content-length'] = body.length;
+              headers['content-type'] = 'application/json';
+            } catch {
+              // Unparseable body — send as-is
+            }
+          }
+        } else if (authMode === 'api-key') {
           // API key mode: inject x-api-key on every request
           delete headers['x-api-key'];
           headers['x-api-key'] = secrets.ANTHROPIC_API_KEY;
@@ -141,39 +175,118 @@ export function startCredentialProxy(
           }
         }
 
-        const isMessagesEndpoint = req.url?.includes('/v1/messages');
+        // Build upstream path.
+        // OpenRouter messages: /v1/messages → /api/v1/chat/completions (OpenAI endpoint)
+        // OpenRouter other:    strip Anthropic-specific query params (?beta=true etc)
+        // Direct:              forward as-is
+        const pathPrefix = upstreamUrl.pathname !== '/' ? upstreamUrl.pathname : '';
+        let reqPath: string;
+        if (useOpenRouter && isMessagesEndpoint) {
+          reqPath = '/v1/chat/completions';
+        } else if (useOpenRouter) {
+          reqPath = (req.url ?? '/').split('?')[0];
+        } else {
+          reqPath = req.url ?? '/';
+        }
+        const upstreamPath = pathPrefix + reqPath;
+        logger.debug({ upstreamPath, model: useOpenRouter ? openrouterModel : undefined }, 'Proxy forwarding request');
 
         const upstream = makeRequest(
           {
             hostname: upstreamUrl.hostname,
             port: upstreamUrl.port || (isHttps ? 443 : 80),
-            path: req.url,
+            path: upstreamPath,
             method: req.method,
             headers,
           } as RequestOptions,
           (upRes) => {
-            res.writeHead(upRes.statusCode!, upRes.headers);
-
-            // Tee: capture body for usage parsing while streaming to client
-            if (
-              onTokenUsage &&
-              isMessagesEndpoint &&
-              upRes.statusCode === 200
-            ) {
-              const contentType = String(upRes.headers['content-type'] || '');
-              const chunks: Buffer[] = [];
-              upRes.on('data', (chunk: Buffer) => {
-                chunks.push(chunk);
-                res.write(chunk);
-              });
+            if (upRes.statusCode !== 200) {
+              const errChunks: Buffer[] = [];
+              upRes.on('data', (c: Buffer) => errChunks.push(c));
               upRes.on('end', () => {
-                res.end();
-                const bodyText = Buffer.concat(chunks).toString('utf-8');
-                const usage = parseTokenUsage(bodyText, contentType);
-                if (usage) onTokenUsage(usage);
+                const errBody = Buffer.concat(errChunks).toString('utf-8').slice(0, 500);
+                logger.warn({ status: upRes.statusCode, path: upstreamPath, body: errBody }, 'Proxy upstream non-200 response');
+                if (!res.headersSent) {
+                  res.writeHead(upRes.statusCode!, upRes.headers);
+                  res.end(Buffer.concat(errChunks));
+                }
               });
+              return;
+            }
+
+            if (useOpenRouter && isMessagesEndpoint && upRes.statusCode === 200) {
+              // Translate OpenRouter OpenAI-format response → Anthropic format
+              const contentType = String(upRes.headers['content-type'] || '');
+              const isStreaming = contentType.includes('text/event-stream');
+              res.writeHead(200, upRes.headers);
+
+              if (isStreaming) {
+                const translator = new StreamTranslator();
+                const translatedChunks: string[] = [];
+                let lineBuffer = '';
+                upRes.on('data', (chunk: Buffer) => {
+                  lineBuffer += chunk.toString('utf-8');
+                  const lines = lineBuffer.split('\n');
+                  lineBuffer = lines.pop() ?? '';
+                  for (const line of lines) {
+                    for (const ev of translator.processLine(line)) {
+                      res.write(ev);
+                      translatedChunks.push(ev);
+                    }
+                  }
+                });
+                upRes.on('end', () => {
+                  if (lineBuffer) {
+                    for (const ev of translator.processLine(lineBuffer)) {
+                      res.write(ev);
+                      translatedChunks.push(ev);
+                    }
+                  }
+                  res.end();
+                  if (onTokenUsage) {
+                    const usage = parseTokenUsage(translatedChunks.join(''), 'text/event-stream');
+                    if (usage) onTokenUsage(usage);
+                  }
+                });
+              } else {
+                const chunks: Buffer[] = [];
+                upRes.on('data', (c: Buffer) => chunks.push(c));
+                upRes.on('end', () => {
+                  try {
+                    const openaiBody = JSON.parse(Buffer.concat(chunks).toString('utf-8'));
+                    const anthropicBody = translateResponseBody(openaiBody);
+                    const translated = Buffer.from(JSON.stringify(anthropicBody), 'utf-8');
+                    res.write(translated);
+                    res.end();
+                    if (onTokenUsage) {
+                      const usage = parseTokenUsage(JSON.stringify(anthropicBody), 'application/json');
+                      if (usage) onTokenUsage(usage);
+                    }
+                  } catch {
+                    res.write(Buffer.concat(chunks));
+                    res.end();
+                  }
+                });
+              }
             } else {
-              upRes.pipe(res);
+              res.writeHead(upRes.statusCode!, upRes.headers);
+              // Tee: capture body for usage parsing while streaming to client
+              if (onTokenUsage && isMessagesEndpoint && upRes.statusCode === 200) {
+                const contentType = String(upRes.headers['content-type'] || '');
+                const chunks: Buffer[] = [];
+                upRes.on('data', (chunk: Buffer) => {
+                  chunks.push(chunk);
+                  res.write(chunk);
+                });
+                upRes.on('end', () => {
+                  res.end();
+                  const bodyText = Buffer.concat(chunks).toString('utf-8');
+                  const usage = parseTokenUsage(bodyText, contentType);
+                  if (usage) onTokenUsage(usage);
+                });
+              } else {
+                upRes.pipe(res);
+              }
             }
           },
         );
