@@ -352,7 +352,6 @@ async function runQuery(
   const stream = new MessageStream();
   stream.push(prompt);
 
-  // Poll IPC for follow-up messages and _close sentinel during the query
   let ipcPolling = true;
   let closedDuringQuery = false;
   const pollIpcDuringQuery = () => {
@@ -378,15 +377,12 @@ async function runQuery(
   let messageCount = 0;
   let resultCount = 0;
 
-  // Load global CLAUDE.md as additional system context (shared across all groups)
   const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
   let globalClaudeMd: string | undefined;
   if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
     globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
   }
 
-  // Discover additional directories mounted at /workspace/extra/*
-  // These are passed to the SDK so their CLAUDE.md files are loaded automatically
   const extraDirs: string[] = [];
   const extraBase = '/workspace/extra';
   if (fs.existsSync(extraBase)) {
@@ -525,6 +521,7 @@ async function main(): Promise<void> {
     containerInput = JSON.parse(stdinData);
     try { fs.unlinkSync('/tmp/input.json'); } catch { /* may not exist */ }
     log(`Received input for group: ${containerInput.groupFolder}`);
+    log(`Input details: chatJid=${containerInput.chatJid}, isMain=${containerInput.isMain}, isScheduledTask=${containerInput.isScheduledTask}, sessionId=${containerInput.sessionId || 'new'}`);
   } catch (err) {
     writeOutput({
       status: 'error',
@@ -534,8 +531,6 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Credentials are injected by the host's credential proxy via ANTHROPIC_BASE_URL.
-  // No real secrets exist in the container environment.
   const sdkEnv: Record<string, string | undefined> = { ...process.env };
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -544,10 +539,8 @@ async function main(): Promise<void> {
   let sessionId = containerInput.sessionId;
   fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
 
-  // Clean up stale _close sentinel from previous container runs
   try { fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL); } catch { /* ignore */ }
 
-  // Build initial prompt (drain any pending IPC messages too)
   let prompt = containerInput.prompt;
   if (containerInput.isScheduledTask) {
     prompt = `[SCHEDULED TASK - The following message was sent automatically and is not coming directly from the user or group.]\n\n${prompt}`;
@@ -558,37 +551,33 @@ async function main(): Promise<void> {
     prompt += '\n' + pending.join('\n');
   }
 
-  // Expand any [Photo: ...] placeholders into multimodal content blocks
   let currentContent: string | ContentBlock[] = buildMultimodalContent(prompt);
 
-  // Query loop: run query → wait for IPC message → run new query → repeat
   let resumeAt: string | undefined;
   try {
     while (true) {
       log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`);
+      log(`Prompt content length: ${typeof currentContent === 'string' ? currentContent.length : 'multimodal ' + JSON.stringify(currentContent).length} chars`);
 
       const queryResult = await runQuery(currentContent, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
       if (queryResult.newSessionId) {
         sessionId = queryResult.newSessionId;
+        log(`Updated session ID: ${sessionId}`);
       }
       if (queryResult.lastAssistantUuid) {
         resumeAt = queryResult.lastAssistantUuid;
+        log(`Set resumeAt to UUID: ${resumeAt}`);
       }
 
-      // If _close was consumed during the query, exit immediately.
-      // Don't emit a session-update marker (it would reset the host's
-      // idle timer and cause a 30-min delay before the next _close).
       if (queryResult.closedDuringQuery) {
         log('Close sentinel consumed during query, exiting');
         break;
       }
 
-      // Emit session update so host can track it
       writeOutput({ status: 'success', result: null, newSessionId: sessionId });
 
       log('Query ended, waiting for next IPC message...');
 
-      // Wait for the next message or _close sentinel
       const nextMessage = await waitForIpcMessage();
       if (nextMessage === null) {
         log('Close sentinel received, exiting');

@@ -22,8 +22,6 @@ export interface TelegramChannelOpts {
 
 /**
  * Send a message with Telegram Markdown parse mode, falling back to plain text.
- * Claude's output naturally matches Telegram's Markdown v1 format:
- *   *bold*, _italic_, `code`, ```code blocks```, [links](url)
  */
 async function sendTelegramMessage(
   api: { sendMessage: Api['sendMessage'] },
@@ -37,7 +35,6 @@ async function sendTelegramMessage(
       parse_mode: 'Markdown',
     });
   } catch (err) {
-    // Fallback: send as plain text if Markdown parsing fails
     logger.debug({ err }, 'Markdown send failed, falling back to plain text');
     await api.sendMessage(chatId, text, options);
   }
@@ -111,7 +108,7 @@ export class TelegramChannel implements Channel {
   private bot: Bot | null = null;
   private opts: TelegramChannelOpts;
   private botToken: string;
-  private botUsername: string | null = null; // cached bot username
+  private botUsername: string | null = null;
 
   constructor(botToken: string, opts: TelegramChannelOpts) {
     this.botToken = botToken;
@@ -121,7 +118,6 @@ export class TelegramChannel implements Channel {
   async connect(): Promise<void> {
     this.bot = new Bot(this.botToken);
 
-    // Command to get chat ID (useful for registration)
     this.bot.command('chatid', (ctx) => {
       const chatId = ctx.chat.id;
       const chatType = ctx.chat.type;
@@ -136,13 +132,10 @@ export class TelegramChannel implements Channel {
       );
     });
 
-    // Command to check bot status
     this.bot.command('ping', (ctx) => {
       ctx.reply(`${ASSISTANT_NAME} is online.`);
     });
 
-    // Telegram bot commands handled above — skip them in the general handler
-    // so they don't also get stored as messages. All other /commands flow through.
     const TELEGRAM_BOT_COMMANDS = new Set(['chatid', 'ping']);
 
     this.bot.on('message:text', async (ctx) => {
@@ -162,13 +155,11 @@ export class TelegramChannel implements Channel {
       const sender = ctx.from?.id.toString() || '';
       const msgId = ctx.message.message_id.toString();
 
-      // Determine chat name
       const chatName =
         ctx.chat.type === 'private'
           ? senderName
           : (ctx.chat as any).title || chatJid;
 
-      // Store chat metadata for discovery
       const isGroup =
         ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
       this.opts.onChatMetadata(
@@ -179,7 +170,6 @@ export class TelegramChannel implements Channel {
         isGroup,
       );
 
-      // Only deliver messages for registered groups
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) {
         logger.debug(
@@ -189,17 +179,10 @@ export class TelegramChannel implements Channel {
         return;
       }
 
-      // --- Trigger handling ---
-      // If the group requires a trigger, ensure the message starts with the trigger pattern.
-      // We support two ways the bot can be addressed:
-      // 1. User types the trigger word explicitly (e.g., "@Andy ...")
-      // 2. User mentions the bot via @username (Telegram mention entity)
-      // If neither is present and the group requires a trigger, drop the message.
-      const requiresTrigger = group.requiresTrigger !== false; // default true
+      const requiresTrigger = group.requiresTrigger !== false;
       let hasTrigger = TRIGGER_PATTERN.test(content);
 
       if (!hasTrigger && requiresTrigger) {
-        // Check if the bot is mentioned via @username (mention or text_mention entities)
         const botUsername = this.botUsername || ctx.me?.username?.toLowerCase();
         const entities = ctx.message.entities || [];
 
@@ -211,7 +194,6 @@ export class TelegramChannel implements Channel {
             return mentionText === `@${botUsername}`;
           }
           if (entity.type === 'text_mention') {
-            // text_mention has a user object; check if it's our bot
             const mentionedUser = (entity as any).user;
             return mentionedUser?.username?.toLowerCase() === botUsername;
           }
@@ -219,9 +201,12 @@ export class TelegramChannel implements Channel {
         });
 
         if (isBotMentioned) {
-          // Prepend the trigger so the agent sees a consistent format
           content = `@${ASSISTANT_NAME} ${content}`;
           hasTrigger = true;
+          logger.debug(
+            { chatJid, botUsername: `@${botUsername}` },
+            'Bot mention detected, prepended trigger',
+          );
         }
       }
 
@@ -233,7 +218,11 @@ export class TelegramChannel implements Channel {
         return;
       }
 
-      // Deliver message — startMessageLoop() will pick it up
+      logger.info(
+        { chatJid, chatName, sender: senderName, hasTrigger, contentLength: content.length },
+        'Telegram message stored, forwarding to agent',
+      );
+
       this.opts.onMessage(chatJid, {
         id: msgId,
         chat_jid: chatJid,
@@ -243,18 +232,15 @@ export class TelegramChannel implements Channel {
         timestamp,
         is_from_me: false,
       });
-
-      logger.info(
-        { chatJid, chatName, sender: senderName, hasTrigger },
-        'Telegram message stored',
-      );
     });
 
-    // Handle non-text messages with placeholders so the agent knows something was sent
     const storeNonText = (ctx: any, placeholder: string) => {
       const chatJid = `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
-      if (!group) return;
+      if (!group) {
+        logger.debug({ chatJid }, 'Non-text message from unregistered chat, ignoring');
+        return;
+      }
 
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -274,7 +260,11 @@ export class TelegramChannel implements Channel {
         isGroup,
       );
 
-      // For non-text, we also apply trigger logic? Usually media messages are assumed addressed to bot if sent in a group where bot is a member. But we can be consistent: if group requires trigger, we should check if the message is intended for the bot. However, Telegram doesn't have a "trigger" concept for media; the bot is simply mentioned by being in the conversation? Actually, in groups, bots receive all messages unless they are muted or privacy mode is enabled. Telegram bots have a "privacy mode" that by default prevents them from seeing all messages. But if privacy mode is disabled, they get all messages. The bot might be set to receive only messages that mention it. That's a bot setting. Our code can't control that. So we assume the bot is configured to receive only relevant messages. For simplicity, we'll forward all media from registered groups, as the bot likely only gets mentioned media. But we could also apply the same trigger check if needed. For now, keep as-is.
+      logger.info(
+        { chatJid, placeholder, hasCaption: !!ctx.message.caption },
+        'Non-text Telegram message stored',
+      );
+
       this.opts.onMessage(chatJid, {
         id: ctx.message.message_id.toString(),
         chat_jid: chatJid,
@@ -313,6 +303,7 @@ export class TelegramChannel implements Channel {
         storeNonText(ctx, '[Photo]');
       }
     });
+
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
     this.bot.on('message:voice', async (ctx) => {
       const chatJid = `tg:${ctx.chat.id}`;
@@ -364,6 +355,7 @@ export class TelegramChannel implements Channel {
         storeNonText(ctx, '[Voice message]');
       }
     });
+
     this.bot.on('message:audio', async (ctx) => {
       const chatJid = `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
@@ -401,28 +393,28 @@ export class TelegramChannel implements Channel {
         storeNonText(ctx, '[Audio]');
       }
     });
+
     this.bot.on('message:document', (ctx) => {
       const name = ctx.message.document?.file_name || 'file';
       storeNonText(ctx, `[Document: ${name}]`);
     });
+
     this.bot.on('message:sticker', (ctx) => {
       const emoji = ctx.message.sticker?.emoji || '';
       storeNonText(ctx, `[Sticker ${emoji}]`);
     });
+
     this.bot.on('message:location', (ctx) => storeNonText(ctx, '[Location]'));
     this.bot.on('message:contact', (ctx) => storeNonText(ctx, '[Contact]'));
 
-    // Handle errors gracefully
     this.bot.catch((err) => {
       logger.error({ err: err.message }, 'Telegram bot error');
     });
 
-    // Start polling — returns a Promise that resolves when started
     return new Promise<void>((resolve, reject) => {
       this.bot!
         .start({
           onStart: async (botInfo) => {
-            // Cache the bot's username for mention detection (works even if ctx.me is not set yet)
             this.botUsername = botInfo.username?.toLowerCase() || null;
             logger.info(
               { username: botInfo.username, id: botInfo.id, cachedUsername: this.botUsername },
@@ -451,7 +443,6 @@ export class TelegramChannel implements Channel {
     try {
       const numericId = jid.replace(/^tg:/, '');
 
-      // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
       if (text.length <= MAX_LENGTH) {
         await sendTelegramMessage(this.bot.api, numericId, text);
