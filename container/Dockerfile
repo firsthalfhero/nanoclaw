@@ -6,6 +6,7 @@ FROM node:22-slim
 # Install system dependencies for Chromium and Python skills
 RUN apt-get update && apt-get install -y \
     chromium \
+    cron \
     fonts-liberation \
     fonts-noto-cjk \
     fonts-noto-color-emoji \
