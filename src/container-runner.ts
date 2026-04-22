@@ -305,6 +305,8 @@ export async function runContainerAgent(
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
+    logger.info({ containerName, pid: container.pid }, 'Container process spawned');
+
     onProcess(container, containerName);
 
     let stdout = '';
@@ -312,13 +314,11 @@ export async function runContainerAgent(
     let stdoutTruncated = false;
     let stderrTruncated = false;
 
-    container.stdin.write(JSON.stringify(input));
+    const inputJson = JSON.stringify(input);
+    container.stdin.write(inputJson);
+    logger.debug({ containerName, inputSize: inputJson.length }, 'Input written to container stdin');
     container.stdin.end();
-
-    logger.debug(
-      { group: group.name, containerName, inputPromptLength: input.prompt.length },
-      'Input sent to container stdin',
-    );
+    logger.debug({ containerName }, 'Container stdin closed');
 
     let parseBuffer = '';
     let newSessionId: string | undefined;

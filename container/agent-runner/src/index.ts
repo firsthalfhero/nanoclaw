@@ -19,6 +19,14 @@ import path from 'path';
 import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
+process.on('unhandledRejection', (reason) => {
+  log(`UNHANDLED REJECTION: ${reason instanceof Error ? reason.message : String(reason)}`);
+});
+process.on('uncaughtException', (err) => {
+  log(`UNCAUGHT EXCEPTION: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+});
+
 interface ContainerInput {
   prompt: string;
   sessionId?: string;
@@ -514,11 +522,14 @@ function buildMultimodalContent(prompt: string): string | ContentBlock[] {
 }
 
 async function main(): Promise<void> {
+  log('Agent runner starting (PID ' + process.pid + ')');
   let containerInput: ContainerInput;
 
   try {
     const stdinData = await readStdin();
+    log(`Stdin received: ${stdinData.length} bytes`);
     containerInput = JSON.parse(stdinData);
+    log(`Container input parsed: group=${containerInput.groupFolder}, chatJid=${containerInput.chatJid}, sessionId=${containerInput.sessionId || 'new'}`);
     try { fs.unlinkSync('/tmp/input.json'); } catch { /* may not exist */ }
     log(`Received input for group: ${containerInput.groupFolder}`);
     log(`Input details: chatJid=${containerInput.chatJid}, isMain=${containerInput.isMain}, isScheduledTask=${containerInput.isScheduledTask}, sessionId=${containerInput.sessionId || 'new'}`);

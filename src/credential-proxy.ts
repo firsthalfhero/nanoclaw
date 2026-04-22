@@ -130,6 +130,7 @@ export function startCredentialProxy(
 
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
+      logger.debug({ method: req.method, url: req.url, contentLength: req.headers['content-length'] }, 'Proxy received request');
       const chunks: Buffer[] = [];
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {
@@ -169,11 +170,14 @@ export function startCredentialProxy(
             try {
               const anthropicJson = JSON.parse(body.toString('utf-8'));
               const openaiJson = translateRequestBody(anthropicJson, openrouterModel!);
+              // Ensure the model is exactly the configured OpenRouter model ID (no extra prefix)
+              openaiJson.model = openrouterModel;
               body = Buffer.from(JSON.stringify(openaiJson), 'utf-8');
               headers['content-length'] = body.length;
               headers['content-type'] = 'application/json';
-            } catch {
-              // Unparseable body — send as-is
+              logger.debug({ model: openrouterModel, anthropicModel: anthropicJson.model }, 'Translated request to OpenRouter format');
+            } catch (err) {
+              logger.warn({ err }, 'Failed to translate request body, sending as-is');
             }
           }
         } else if (authMode === 'api-key') {
@@ -208,6 +212,14 @@ export function startCredentialProxy(
         }
         const upstreamPath = pathPrefix + reqPath;
         logger.debug({ upstreamPath, model: useOpenRouter ? openrouterModel : undefined }, 'Proxy forwarding request');
+        logger.debug({
+          upstreamPath,
+          headers: {
+            ...headers,
+            authorization: headers.authorization ? 'Bearer [redacted]' : undefined,
+            'x-api-key': headers['x-api-key'] ? '[redacted]' : undefined,
+          },
+        }, 'Forwarding to upstream with headers (sensitive headers redacted)');
 
         const upstream = makeRequest(
           {
@@ -219,6 +231,7 @@ export function startCredentialProxy(
           } as RequestOptions,
           (upRes) => {
             if (upRes.statusCode !== 200) {
+              logger.debug({ status: upRes.statusCode, headers: upRes.headers }, 'Upstream non-200 response');
               const errChunks: Buffer[] = [];
               upRes.on('data', (c: Buffer) => errChunks.push(c));
               upRes.on('end', () => {
@@ -288,6 +301,7 @@ export function startCredentialProxy(
               }
             } else {
               res.writeHead(upRes.statusCode!, upRes.headers);
+              logger.debug({ status: upRes.statusCode, contentType: upRes.headers['content-type'] }, 'Upstream response received, piping to client');
               // Tee: capture body for usage parsing while streaming to client
               if (onTokenUsage && isMessagesEndpoint && upRes.statusCode === 200) {
                 const contentType = String(upRes.headers['content-type'] || '');
