@@ -466,8 +466,25 @@ async function runQuery(
     if (message.type === 'result') {
       resultCount++;
       const resultMsg = message as any;
+      // Log the full result message structure for debugging
+      log(`Result message full: ${JSON.stringify(resultMsg)}`);
+      
       const textResult = resultMsg.result ? String(resultMsg.result).slice(0, 200) : null;
-      const errorInfo = resultMsg.error ? String(resultMsg.error).slice(0, 500) : null;
+      
+      // Extract error from multiple possible fields
+      let errorInfo: string | null = null;
+      if (resultMsg.error) {
+        if (typeof resultMsg.error === 'string') {
+          errorInfo = resultMsg.error;
+        } else if (resultMsg.error.message) {
+          errorInfo = resultMsg.error.message;
+        } else {
+          errorInfo = JSON.stringify(resultMsg.error);
+        }
+      } else if (resultMsg.message && resultMsg.subtype !== 'success') {
+        errorInfo = resultMsg.message;
+      }
+      
       const isError = resultMsg.subtype === 'error_during_execution' || !!errorInfo;
       const status = isError ? 'error' : 'success';
       const subtype = message.subtype || 'unknown';
