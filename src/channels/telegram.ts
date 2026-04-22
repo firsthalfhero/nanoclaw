@@ -219,7 +219,13 @@ export class TelegramChannel implements Channel {
       }
 
       logger.info(
-        { chatJid, chatName, sender: senderName, hasTrigger, contentLength: content.length },
+        {
+          chatJid,
+          chatName,
+          sender: senderName,
+          hasTrigger,
+          contentLength: content.length,
+        },
         'Telegram message stored, forwarding to agent',
       );
 
@@ -238,7 +244,10 @@ export class TelegramChannel implements Channel {
       const chatJid = `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) {
-        logger.debug({ chatJid }, 'Non-text message from unregistered chat, ignoring');
+        logger.debug(
+          { chatJid },
+          'Non-text message from unregistered chat, ignoring',
+        );
         return;
       }
 
@@ -412,25 +421,27 @@ export class TelegramChannel implements Channel {
     });
 
     return new Promise<void>((resolve, reject) => {
-      this.bot!
-        .start({
-          onStart: async (botInfo) => {
-            this.botUsername = botInfo.username?.toLowerCase() || null;
-            logger.info(
-              { username: botInfo.username, id: botInfo.id, cachedUsername: this.botUsername },
-              'Telegram bot connected',
-            );
-            console.log(`\n  Telegram bot: @${botInfo.username}`);
-            console.log(
-              `  Send /chatid to the bot to get a chat's registration ID\n`,
-            );
-            resolve();
-          },
-        })
-        .catch((err) => {
-          logger.error({ err: err.message }, 'Telegram bot start error');
-          reject(err);
-        });
+      this.bot!.start({
+        onStart: async (botInfo) => {
+          this.botUsername = botInfo.username?.toLowerCase() || null;
+          logger.info(
+            {
+              username: botInfo.username,
+              id: botInfo.id,
+              cachedUsername: this.botUsername,
+            },
+            'Telegram bot connected',
+          );
+          console.log(`\n  Telegram bot: @${botInfo.username}`);
+          console.log(
+            `  Send /chatid to the bot to get a chat's registration ID\n`,
+          );
+          resolve();
+        },
+      }).catch((err) => {
+        logger.error({ err: err.message }, 'Telegram bot start error');
+        reject(err);
+      });
     });
   }
 

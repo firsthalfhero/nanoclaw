@@ -89,11 +89,17 @@ No exceptions: bug fixes, typo patches, version bumps — all of them. A commit 
 ### Identifying AI authorship in git log
 
 - Claude commits: `Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>`
+- Aider commits: `Co-authored-by: aider (claude-sonnet-4-5) <aider@aider.chat>`
 - Codex commits: `Co-authored-by: Codex <codex@openai.com>`
 - Human-only commits: no co-author trailer
 
 To find all Claude-authored commits: `git log --all --grep="Co-Authored-By: Claude"`  
+To find all Aider-authored commits: `git log --all --grep="Co-authored-by: aider"`  
 To find all Codex-authored commits: `git log --all --grep="Co-authored-by: Codex"`
+
+### Aider configuration
+
+Aider is configured via `.aider.conf.yml` (gitignored). It reads `CLAUDE.md`, `README.md`, and `docs/REQUIREMENTS.md` as always-on context, auto-commits with `Co-authored-by` attribution, and runs `npm run build` as its test command. Model: `openrouter/anthropic/claude-sonnet-4-5`.
 
 ## Development
 

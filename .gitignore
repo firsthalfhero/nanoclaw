@@ -43,3 +43,4 @@ groups/global/*
 agents-sdk-docs
 __pycache__/
 *.pyc
+.aider*

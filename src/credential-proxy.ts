@@ -125,15 +125,27 @@ export function startCredentialProxy(
   const makeRequest = isHttps ? httpsRequest : httpRequest;
 
   if (useOpenRouter) {
-    logger.info({ model: openrouterModel }, 'Credential proxy: OpenRouter mode active');
+    logger.info(
+      { model: openrouterModel },
+      'Credential proxy: OpenRouter mode active',
+    );
     if (!openrouterReferer && !openrouterTitle) {
-      logger.warn('OpenRouter mode active but neither OPENROUTER_REFERER nor OPENROUTER_TITLE is set — requests may be rejected by OpenRouter');
+      logger.warn(
+        'OpenRouter mode active but neither OPENROUTER_REFERER nor OPENROUTER_TITLE is set — requests may be rejected by OpenRouter',
+      );
     }
   }
 
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
-      logger.debug({ method: req.method, url: req.url, contentLength: req.headers['content-length'] }, 'Proxy received request');
+      logger.debug(
+        {
+          method: req.method,
+          url: req.url,
+          contentLength: req.headers['content-length'],
+        },
+        'Proxy received request',
+      );
       const chunks: Buffer[] = [];
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {
@@ -170,9 +182,15 @@ export function startCredentialProxy(
               anthropicJson.model = openrouterModel;
               body = Buffer.from(JSON.stringify(anthropicJson), 'utf-8');
               headers['content-length'] = body.length;
-              logger.debug({ openrouterModel, originalModel }, 'OpenRouter: overriding model in request');
+              logger.debug(
+                { openrouterModel, originalModel },
+                'OpenRouter: overriding model in request',
+              );
             } catch (err) {
-              logger.warn({ err }, 'OpenRouter: failed to override model in request body');
+              logger.warn(
+                { err },
+                'OpenRouter: failed to override model in request body',
+              );
             }
           }
         } else if (authMode === 'api-key') {
@@ -196,17 +214,26 @@ export function startCredentialProxy(
         // OpenRouter (Anthropic-compat): forward path as-is under /api prefix.
         //   /v1/messages → https://openrouter.ai/api/v1/messages
         // Direct Anthropic: forward as-is.
-        const pathPrefix = upstreamUrl.pathname !== '/' ? upstreamUrl.pathname : '';
+        const pathPrefix =
+          upstreamUrl.pathname !== '/' ? upstreamUrl.pathname : '';
         const upstreamPath = pathPrefix + (req.url ?? '/');
-        logger.debug({ upstreamPath, model: useOpenRouter ? openrouterModel : undefined }, 'Proxy forwarding request');
-        logger.debug({
-          upstreamPath,
-          headers: {
-            ...headers,
-            authorization: headers.authorization ? 'Bearer [redacted]' : undefined,
-            'x-api-key': headers['x-api-key'] ? '[redacted]' : undefined,
+        logger.debug(
+          { upstreamPath, model: useOpenRouter ? openrouterModel : undefined },
+          'Proxy forwarding request',
+        );
+        logger.debug(
+          {
+            upstreamPath,
+            headers: {
+              ...headers,
+              authorization: headers.authorization
+                ? 'Bearer [redacted]'
+                : undefined,
+              'x-api-key': headers['x-api-key'] ? '[redacted]' : undefined,
+            },
           },
-        }, 'Forwarding to upstream with headers (sensitive headers redacted)');
+          'Forwarding to upstream with headers (sensitive headers redacted)',
+        );
 
         const upstream = makeRequest(
           {
@@ -218,12 +245,24 @@ export function startCredentialProxy(
           } as RequestOptions,
           (upRes) => {
             if (upRes.statusCode !== 200) {
-              logger.debug({ status: upRes.statusCode, headers: upRes.headers }, 'Upstream non-200 response');
+              logger.debug(
+                { status: upRes.statusCode, headers: upRes.headers },
+                'Upstream non-200 response',
+              );
               const errChunks: Buffer[] = [];
               upRes.on('data', (c: Buffer) => errChunks.push(c));
               upRes.on('end', () => {
-                const errBody = Buffer.concat(errChunks).toString('utf-8').slice(0, 500);
-                logger.warn({ status: upRes.statusCode, path: upstreamPath, body: errBody }, 'Proxy upstream non-200 response');
+                const errBody = Buffer.concat(errChunks)
+                  .toString('utf-8')
+                  .slice(0, 500);
+                logger.warn(
+                  {
+                    status: upRes.statusCode,
+                    path: upstreamPath,
+                    body: errBody,
+                  },
+                  'Proxy upstream non-200 response',
+                );
                 if (!res.headersSent) {
                   res.writeHead(upRes.statusCode!, upRes.headers);
                   res.end(Buffer.concat(errChunks));
@@ -235,8 +274,18 @@ export function startCredentialProxy(
             // OpenRouter Anthropic-compat endpoint returns native Anthropic format —
             // no response translation needed. Just pipe through (with usage tee).
             res.writeHead(upRes.statusCode!, upRes.headers);
-            logger.debug({ status: upRes.statusCode, contentType: upRes.headers['content-type'] }, 'Upstream response received, piping to client');
-            if (onTokenUsage && isMessagesEndpoint && upRes.statusCode === 200) {
+            logger.debug(
+              {
+                status: upRes.statusCode,
+                contentType: upRes.headers['content-type'],
+              },
+              'Upstream response received, piping to client',
+            );
+            if (
+              onTokenUsage &&
+              isMessagesEndpoint &&
+              upRes.statusCode === 200
+            ) {
               const contentType = String(upRes.headers['content-type'] || '');
               const chunks: Buffer[] = [];
               upRes.on('data', (chunk: Buffer) => {

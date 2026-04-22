@@ -202,7 +202,9 @@ function buildContainerArgs(
   );
 
   const openrouterEnv = readEnvFile(['OPENROUTER_API_KEY', 'OPENROUTER_MODEL']);
-  const useOpenRouter = !!(openrouterEnv['OPENROUTER_API_KEY'] && openrouterEnv['OPENROUTER_MODEL']);
+  const useOpenRouter = !!(
+    openrouterEnv['OPENROUTER_API_KEY'] && openrouterEnv['OPENROUTER_MODEL']
+  );
 
   if (useOpenRouter) {
     args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
@@ -300,7 +302,12 @@ export async function runContainerAgent(
 
   return new Promise((resolve) => {
     logger.debug(
-      { group: group.name, containerName, image: CONTAINER_IMAGE, args: containerArgs },
+      {
+        group: group.name,
+        containerName,
+        image: CONTAINER_IMAGE,
+        args: containerArgs,
+      },
       'Executing container',
     );
 
@@ -308,7 +315,10 @@ export async function runContainerAgent(
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
-    logger.info({ containerName, pid: container.pid }, 'Container process spawned');
+    logger.info(
+      { containerName, pid: container.pid },
+      'Container process spawned',
+    );
 
     onProcess(container, containerName);
 
@@ -319,7 +329,10 @@ export async function runContainerAgent(
 
     const inputJson = JSON.stringify(input);
     container.stdin.write(inputJson);
-    logger.debug({ containerName, inputSize: inputJson.length }, 'Input written to container stdin');
+    logger.debug(
+      { containerName, inputSize: inputJson.length },
+      'Input written to container stdin',
+    );
     container.stdin.end();
     logger.debug({ containerName }, 'Container stdin closed');
 
@@ -367,12 +380,22 @@ export async function runContainerAgent(
             }
             outputChain = outputChain.then(() => onOutput(parsed));
             logger.debug(
-              { group: group.name, containerName, status: parsed.status, hasResult: !!parsed.result },
+              {
+                group: group.name,
+                containerName,
+                status: parsed.status,
+                hasResult: !!parsed.result,
+              },
               'Container output marker parsed',
             );
           } catch (err) {
             logger.warn(
-              { group: group.name, containerName, error: err, jsonStr: jsonStr.slice(0, 200) },
+              {
+                group: group.name,
+                containerName,
+                error: err,
+                jsonStr: jsonStr.slice(0, 200),
+              },
               'Failed to parse streamed output chunk',
             );
           }
