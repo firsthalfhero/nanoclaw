@@ -1,11 +1,11 @@
 ---
 name: tabletennis
 description: >
-  Track table tennis club sessions, entry fees, and lesson credits for George and Henry at Pymble Table Tennis Club.
+  Track table tennis club sessions, entry fees, competition fees, and lesson credits for George and Henry at Pymble Table Tennis Club.
   Use when the user mentions table tennis, TT, ping pong, pinball club, going to the club, playing TT, lessons with James,
   "we went to table tennis", "George and Henry played", "Henry had a lesson", "I paid James", "paid the club",
   "how many lessons do we have left", "what do I owe the club", "table tennis summary", "entry fees", "lesson credits",
-  or any mention of logging a session, lesson payments, or entry fee payments for this club.
+  competition, district, club event, or any mention of logging a session, competition entry, lesson payments, or entry fee payments for this club.
 metadata:
   {
     "nanoclaw": {
@@ -16,7 +16,7 @@ metadata:
 
 # Table Tennis Club Tracker
 
-Track sessions, entry fees, and lesson credits for George and Henry at **Pymble Table Tennis Club**.
+Track sessions, entry fees, competition fees, and lesson credits for George and Henry at **Pymble Table Tennis Club**.
 
 Use the `tabletennis.py` script for ALL operations. ALWAYS run the script — never fabricate session data, fees, or credit balances.
 
@@ -56,6 +56,15 @@ Entry and lessons are **separate charges**. Attending the club gives access to s
 | Entry only (no lesson that session) | $12.00 |
 | Entry with lesson (discounted) | $5.00 |
 
+### Competition Fees
+
+| Type | Fee per person |
+|---|---|
+| District competition | $12.50 |
+| Club competition | $25.00 |
+
+Competition fees apply in addition to regular entry fees. Use `--competition-type district` or `--competition-type club` with `log-session`.
+
 ### Lesson Fees (separate from entry, paid in cash)
 
 - **$80 per lesson**, purchased upfront in blocks of 10 for **$800 cash**
@@ -76,7 +85,7 @@ Both are members of the Pymble Div 6 SNDTTA competition team.
 
 ## Current State (as of 31 Mar 2026)
 
-- **Entry fees:** All paid up ($0 outstanding)
+- **Entry fees:** All paid up ($0 outstanding) — *balance check before each session*
 - **Lesson credits:** 1 remaining from Block 2 (purchased 28 Feb 2026)
 - **Next $800 lesson payment** due soon — only 1 credit left
 
@@ -97,10 +106,10 @@ Both are members of the Pymble Div 6 SNDTTA competition team.
 
 ```bash
 python3 /home/node/.claude/skills/tabletennis/scripts/tabletennis.py log-session \
-  --date 2026-04-05 \
+  --date 2026-04-24 \
   --george --henry \
-  --george-lesson --henry-lesson \
-  --notes "optional notes"
+  --competition-type district \
+  --notes "District competition event"
 ```
 
 Flags:
@@ -109,6 +118,7 @@ Flags:
 - `--henry` — Henry attended
 - `--george-lesson` — George had a lesson (requires `--george`)
 - `--henry-lesson` — Henry had a lesson (requires `--henry`)
+- `--competition-type {district|club}` — type of competition event (optional)
 - `--notes "..."` — optional notes
 
 ### Log a Lesson Credit Purchase ($800 cash block)
