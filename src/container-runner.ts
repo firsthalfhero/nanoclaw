@@ -211,6 +211,9 @@ function buildContainerArgs(
     // Pass model name into the container so agent-runner knows to disable session resumption.
     // The API key stays on the host (proxy handles auth) — only the model string is needed.
     args.push('-e', `OPENROUTER_MODEL=${openrouterEnv['OPENROUTER_MODEL']}`);
+    // Override the SDK's default model so it uses the OpenRouter model instead of
+    // defaulting to claude-sonnet-4-6 (which does not exist on OpenRouter).
+    args.push('-e', `ANTHROPIC_MODEL=${openrouterEnv['OPENROUTER_MODEL']}`);
   } else {
     const authMode = detectAuthMode();
     if (authMode === 'api-key') {
