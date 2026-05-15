@@ -1,0 +1,13 @@
+nutri_help - Show all available commands and usage
+nutri_summary - Get today's nutrition summary (kcal, macros, water)
+nutri_photo - OCR a nutrition label photo and log meal
+nutri_log - Log a meal from food, recipe, or free-text description
+nutri_check_meal - View details of a specific meal
+nutri_water - Log water intake in milliliters
+nutri_today - Detailed breakdown of today's meals
+nutri_week - Get 7-day summary with daily totals
+nutri_recipe - Manage recipes (list, show, save, delete)
+nutri_food - Manage foods (list, show, add, delete)
+nutri_target - View or set daily nutrition targets
+nutri_edit - Edit meal macros (manual correction)
+nutri_delete - Delete a meal log

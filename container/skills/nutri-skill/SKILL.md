@@ -1,0 +1,558 @@
+# Nutrition Tracker Skill
+
+Personal nutrition tracking via Telegram slash commands. All interactions flow through NanoClaw to a Python CLI that calls a FastAPI backend.
+
+## Commands
+
+### `/nutri_help`
+Show all available commands and their descriptions.
+
+**Example:**
+```
+/nutri_help
+```
+
+**Response:**
+```
+Available commands:
+
+📊 Reports
+/nutri_summary - Today's totals (kcal, macros, water)
+/nutri_today - Detailed breakdown of today's meals
+/nutri_week - Last 7 days daily totals
+
+🍽️ Logging
+/nutri_log - Log a meal
+/nutri_photo - OCR a nutrition label photo
+/nutri_water - Log water intake
+
+🔍 Lookup
+/nutri_check_meal - View a specific meal
+
+✏️ Management
+/nutri_edit - Edit meal macros
+/nutri_delete - Delete a meal
+/nutri_recipe - Manage recipes
+/nutri_food - Manage foods
+/nutri_target - View or set daily targets
+
+ℹ️ Help
+/nutri_help - Show this help message
+```
+
+---
+
+### `/nutri_summary`
+Get today's nutrition summary: total kcal, macros, meal count, water intake.
+
+**Example:**
+```
+/nutri_summary
+```
+
+**Response:**
+```json
+{
+  "date": "2026-05-12",
+  "meals": [
+    {"meal_type": "breakfast", "kcal": 450, "protein_g": 20},
+    {"meal_type": "lunch", "kcal": 680, "protein_g": 35}
+  ],
+  "totals": {"kcal": 1130, "protein_g": 55, "fat_g": 38, "carbs_g": 145},
+  "water_ml": 1200,
+  "target": {"kcal": 2500}
+}
+```
+
+---
+
+### `/nutri_photo <meal_type> [image]`
+OCR a nutrition label photo and log the meal. Send the command with an image attachment in one message.
+
+**Parameters:**
+- `meal_type`: `breakfast`, `lunch`, `dinner`, or `snack`
+- `image`: Telegram photo attachment (required in same message as command)
+
+**How it works:**
+1. User sends `/nutri_photo breakfast` with a photo attachment
+2. Skill extracts base64 image data from Telegram
+3. Vision model (OpenRouter Gemini) extracts nutrition from label
+4. **If confidence is HIGH**: Meal is auto-logged to database with frozen snapshot
+5. **If confidence is LOW or MEDIUM**: Meal data is shown for review; user can manually log via `/nutri_log` if needed
+
+**Response (high confidence - auto-logged):**
+```json
+{
+  "status": "logged",
+  "meal_id": "meal_abc123",
+  "product_name": "Protein Bar",
+  "kcal": 210,
+  "protein_g": 20,
+  "logged_at": "2026-05-12T08:30:00+10:00"
+}
+```
+
+**Response (low confidence - shows data for review):**
+```json
+{
+  "status": "extracted",
+  "meal_type": "breakfast",
+  "product_name": "Granola Cereal",
+  "kcal": 450,
+  "protein_g": 12,
+  "fat_g": 8,
+  "carbs_g": 75,
+  "confidence": "low",
+  "note": "Low confidence. Please review the extracted data. Use /nutri_log to manually enter this meal if incorrect."
+}
+```
+
+**Error handling:**
+- If vision model fails (timeout, invalid response): "Couldn't read the label clearly. Try a clearer photo or enter manually with `/nutri_log`"
+- Exit code 3 from CLI signals OCR failure; user should try a different angle or use `/nutri_log`
+
+**Limitations (v1):**
+- Photo must be sent in same message as command (no multi-turn confirmation flow)
+- High-confidence extractions are auto-logged; low-confidence require manual entry via `/nutri_log`
+- Future versions will support multi-turn confirmation and corrections
+
+---
+
+### `/nutri_log <meal_type> <food_or_recipe> [quantity] [unit]`
+Log a meal from a food, recipe, or free-text description.
+
+**Parameters:**
+- `meal_type`: `breakfast`, `lunch`, `dinner`, or `snack`
+- `food_or_recipe`: Name of a saved food/recipe, or free-text (e.g., "grilled chicken breast 200g")
+- `quantity`: Optional (defaults to serving size or 100g)
+- `unit`: Optional (g, ml, cup, etc.)
+
+**Examples:**
+```
+/nutri_log breakfast "Protein Porridge"
+/nutri_log lunch "Greek Yogurt" 200 g
+/nutri_log dinner "grilled salmon with rice"
+```
+
+**Response:**
+```json
+{
+  "status": "logged",
+  "meal_type": "lunch",
+  "food_name": "Greek Yogurt",
+  "quantity": 200,
+  "unit": "g",
+  "kcal": 160,
+  "protein_g": 18,
+  "logged_at": "2026-05-12T12:00:00+10:00"
+}
+```
+
+**Special case — AI estimate:**
+If the food/recipe is not found, ask: "I don't have '{input}' in the database. Should I estimate nutrition for '{input}' using AI?"
+- If user confirms, call text estimation model
+- Return estimated nutrition with `confidence: "low"` note
+- Still log the meal with frozen snapshot
+
+---
+
+### `/nutri_check-meal <meal_id>`
+View details of a specific meal log.
+
+**Parameters:**
+- `meal_id`: ID returned from `/nutri_log` response
+
+**Response:**
+```json
+{
+  "id": "meal_abc123",
+  "meal_type": "breakfast",
+  "food_name": "Oats",
+  "quantity": 50,
+  "unit": "g",
+  "kcal": 175,
+  "protein_g": 6,
+  "fat_g": 4,
+  "carbs_g": 30,
+  "logged_at": "2026-05-12T08:00:00+10:00"
+}
+```
+
+---
+
+### `/nutri_water <volume_ml>`
+Log water intake.
+
+**Parameters:**
+- `volume_ml`: Milliliters (e.g., 250, 500, 1000)
+
+**Examples:**
+```
+/nutri_water 500
+/nutri_water 250
+```
+
+**Response:**
+```json
+{
+  "status": "logged",
+  "volume_ml": 500,
+  "total_today": 1500,
+  "logged_at": "2026-05-12T14:30:00+10:00"
+}
+```
+
+---
+
+### `/nutri_today`
+Get detailed breakdown of today's meals (like `/nutri_summary` but with each meal listed).
+
+**Response:**
+```json
+{
+  "date": "2026-05-12",
+  "meals": [
+    {
+      "id": "meal_1",
+      "meal_type": "breakfast",
+      "food_name": "Oats",
+      "kcal": 175,
+      "protein_g": 6
+    },
+    {
+      "id": "meal_2",
+      "meal_type": "lunch",
+      "food_name": "Chicken Salad",
+      "kcal": 520,
+      "protein_g": 45
+    }
+  ],
+  "totals": {"kcal": 695, "protein_g": 51},
+  "water_ml": 1200
+}
+```
+
+---
+
+### `/nutri_week`
+Get week summary: daily totals for last 7 days.
+
+**Response:**
+```json
+{
+  "period": "2026-05-06 to 2026-05-12",
+  "days": [
+    {"date": "2026-05-06", "kcal": 2150, "protein_g": 120},
+    {"date": "2026-05-07", "kcal": 2300, "protein_g": 125},
+    ...
+    {"date": "2026-05-12", "kcal": 2420, "protein_g": 130}
+  ],
+  "weekly_avg": {"kcal": 2245, "protein_g": 124}
+}
+```
+
+---
+
+### `/nutri_recipe list`
+List all saved recipes.
+
+**Response:**
+```json
+{
+  "recipes": [
+    {"id": "rec_1", "name": "Protein Porridge", "kcal": 450, "protein_g": 20},
+    {"id": "rec_2", "name": "Chicken Stir Fry", "kcal": 620, "protein_g": 45}
+  ]
+}
+```
+
+---
+
+### `/nutri_recipe show <recipe_name>`
+Show details of a specific recipe (ingredients, macros).
+
+**Example:**
+```
+/nutri_recipe show "Protein Porridge"
+```
+
+**Response:**
+```json
+{
+  "name": "Protein Porridge",
+  "ingredients": [
+    {"food": "Oats", "quantity": 50, "unit": "g"},
+    {"food": "Greek Yogurt", "quantity": 150, "unit": "g"},
+    {"food": "Banana", "quantity": 1, "unit": "item"}
+  ],
+  "totals": {
+    "kcal": 450,
+    "protein_g": 20,
+    "fat_g": 12,
+    "carbs_g": 55
+  }
+}
+```
+
+---
+
+### `/nutri_recipe save <name> <food1> <qty1> <unit1> [food2 qty2 unit2] ...`
+Save a new recipe from a list of foods.
+
+**Example:**
+```
+/nutri_recipe save "MyBowl" "Oats" 50 g "Greek Yogurt" 150 g "Honey" 1 tbsp
+```
+
+**Response:**
+```json
+{
+  "status": "saved",
+  "recipe_id": "rec_new123",
+  "name": "MyBowl",
+  "kcal": 480,
+  "protein_g": 22
+}
+```
+
+**Error handling:**
+- If any food not found, respond with: "Food '{name}' not found. Available foods: [list]. Would you like me to create it first?"
+- Exit code 2 from CLI signals missing prerequisite
+
+---
+
+### `/nutri_recipe delete <recipe_name>`
+Soft-delete a recipe (old logs still reference it).
+
+**Response:**
+```json
+{
+  "status": "deleted",
+  "recipe": "Protein Porridge"
+}
+```
+
+---
+
+### `/nutri_food list [query]`
+List all foods, optionally filtered by name.
+
+**Examples:**
+```
+/nutri_food list
+/nutri_food list oats
+```
+
+**Response:**
+```json
+{
+  "foods": [
+    {"id": "food_1", "name": "Oats", "source": "manual", "serving": "per_100g"},
+    {"id": "food_2", "name": "Greek Yogurt", "source": "manual", "serving": "per_100g"}
+  ]
+}
+```
+
+---
+
+### `/nutri_food show <food_name>`
+Show details of a food (macros, serving type, source).
+
+**Example:**
+```
+/nutri_food show "Oats"
+```
+
+**Response:**
+```json
+{
+  "name": "Oats",
+  "brand": null,
+  "kcal": 350,
+  "protein_g": 12,
+  "fat_g": 8,
+  "carbs_g": 60,
+  "serving_type": "per_100g",
+  "source": "manual"
+}
+```
+
+---
+
+### `/nutri_food add-manual <name> <kcal> <protein_g> <fat_g> <carbs_g> [brand]`
+Add a new food manually.
+
+**Example:**
+```
+/nutri_food add-manual "Salmon Fillet" 208 25 12 0
+```
+
+**Response:**
+```json
+{
+  "status": "created",
+  "food_id": "food_new456",
+  "name": "Salmon Fillet",
+  "kcal": 208
+}
+```
+
+---
+
+### `/nutri_food delete <food_name>`
+Soft-delete a food (old logs still reference it).
+
+**Response:**
+```json
+{
+  "status": "deleted",
+  "food": "Salmon Fillet"
+}
+```
+
+---
+
+### `/nutri_target show`
+Show current daily nutrition target.
+
+**Response:**
+```json
+{
+  "effective_from": "2026-05-01",
+  "kcal_target": 2500,
+  "protein_g_target": 120,
+  "fat_g_target": null,
+  "carbs_g_target": null
+}
+```
+
+---
+
+### `/nutri_target set <kcal> [protein_g] [fat_g] [carbs_g]`
+Set or update daily nutrition target.
+
+**Example:**
+```
+/nutri_target set 2300 130 75 280
+```
+
+**Response:**
+```json
+{
+  "status": "set",
+  "effective_from": "2026-05-12",
+  "kcal_target": 2300,
+  "protein_g_target": 130
+}
+```
+
+---
+
+### `/nutri_edit <meal_id> <field> <new_value>`
+Edit a specific meal's macros (e.g., if manual correction needed).
+
+**Example:**
+```
+/nutri_edit meal_abc123 kcal 250
+```
+
+**Response:**
+```json
+{
+  "status": "updated",
+  "meal_id": "meal_abc123",
+  "kcal": 250
+}
+```
+
+---
+
+### `/nutri_delete <meal_id>`
+Delete a meal log (hard delete).
+
+**Response:**
+```json
+{
+  "status": "deleted",
+  "meal_id": "meal_abc123"
+}
+```
+
+---
+
+## Special Handling
+
+### Photo OCR Flow
+1. User types `/nutri_photo breakfast`
+2. Skill prompts: "Send me a photo of the nutrition label"
+3. User uploads photo
+4. Vision model extracts nutrition data and product name
+5. Skill displays extracted info: "Found: Protein Bar (210 kcal, 20g protein). Correct? Y/N"
+6. If yes: meal logged with frozen snapshot
+7. If no: "What would you like to correct?" (user can edit fields or cancel)
+
+**Confidence handling:**
+- If vision model returns `confidence: "low"`, append note: "(Low confidence — please double-check)"
+- Always show extracted data for user confirmation before logging
+
+### AI Estimate Flow
+1. User enters `/nutri_log lunch "grilled salmon with rice"`
+2. Food "grilled salmon with rice" not found in database
+3. Skill prompts: "I don't have that food. Should I estimate nutrition using AI? Y/N"
+4. If yes:
+   - Text model estimates macros
+   - Skill displays: "Estimated: 520 kcal, 45g protein (low confidence estimate)"
+   - Meal logged with `confidence: "low"` flag
+5. If no: "Would you like to use a different food or save this as a new recipe?"
+
+### Recipe Save Flow
+1. User types `/nutri_recipe save "MyRecipe" "Oats" 50 g "Greek Yogurt" 150 g`
+2. Skill validates all foods exist
+3. If any missing: "Food 'X' not found. Available foods: [list]. Should I create it first? Y/N"
+4. If creating new food: "Add nutrition for 'X' manually? (kcal protein_g fat_g carbs_g)"
+5. Once all validated: "Recipe 'MyRecipe' created: 450 kcal, 20g protein"
+
+### Error Responses
+
+**Network/API errors (exit code 1):**
+```json
+{"error": "Network timeout. Please try again."}
+```
+
+**Data not found (exit code 2):**
+```json
+{"error": "Food 'Spinach' not found. Available: Oats, Greek Yogurt, Banana"}
+```
+
+**OCR/AI failure (exit code 3):**
+```json
+{"error": "Couldn't read the label clearly. Try a clearer photo or enter manually."}
+```
+
+---
+
+## Implementation Notes
+
+- All timestamp responses are in Sydney timezone (`Australia/Sydney`)
+- All macros are floats (e.g., `protein_g: 20.5`)
+- Soft-deleted foods/recipes are excluded from lists but old logs still reference them
+- Meal logs capture frozen snapshots; editing a recipe later does NOT change old logs
+- Water intake is logged separately; not part of meal totals
+- All output is JSON; Skill displays human-friendly interpretation in Telegram
+
+---
+
+## Testing Checklist
+
+- [ ] `/nutri_summary` returns today's totals
+- [ ] `/nutri_photo breakfast` with real photo extracts nutrition correctly
+- [ ] `/nutri_log` with saved recipe and custom quantity works
+- [ ] `/nutri_log` with free-text triggers AI estimate flow
+- [ ] `/nutri_recipe save` creates recipe from ingredients
+- [ ] `/nutri_target set` persists target and affects reports
+- [ ] `/nutri_week` shows 7-day trend
+- [ ] `/nutri_water` increments daily total
+- [ ] Soft delete: deleted foods don't appear in lists but old logs still show them
+- [ ] Frozen macros: editing recipe doesn't change old meal logs
+- [ ] All responses are valid JSON
+

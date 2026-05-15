@@ -36,6 +36,10 @@ RUN python3 --version
 # Install Python packages for skills
 RUN pip3 install --break-system-packages firebase-admin
 
+# Install nutri-skill dependencies
+COPY skills/nutri-skill/scripts/requirements.txt /tmp/nutri-requirements.txt
+RUN pip3 install --break-system-packages -r /tmp/nutri-requirements.txt && rm /tmp/nutri-requirements.txt
+
 # Set Chromium path for agent-browser
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
