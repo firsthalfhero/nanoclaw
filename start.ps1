@@ -4,6 +4,18 @@ param(
     [switch]$Debug
 )
 
+# Check if Docker is running
+try {
+    $null = & docker info 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Docker is not running"
+    }
+} catch {
+    Write-Host "FATAL: Docker is not running. NanoClaw requires Docker to be running." -ForegroundColor Red
+    Write-Host "Please start Docker Desktop or the Docker service and try again." -ForegroundColor Red
+    exit 1
+}
+
 $root        = $PSScriptRoot
 $outLog      = "$root\logs\nanoclaw-out.log"
 $errLog      = "$root\logs\nanoclaw-err.log"

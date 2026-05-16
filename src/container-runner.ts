@@ -234,6 +234,11 @@ function buildContainerArgs(
     'FIREBASE_SERVICE_ACCOUNT',
     'OPENAI_API_KEY',
     'GOOGLE_GEMINI_API_KEY',
+    // nutri-skill
+    'NUTRI_API_URL',
+    'OPENROUTER_API_KEY',
+    'OPENROUTER_VISION_MODEL',
+    'OPENROUTER_TEXT_MODEL',
   ]);
   for (const [key, value] of Object.entries(skillEnv)) {
     args.push('-e', `${key}=${value}`);
