@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # NanoClaw
 
 Personal Claude assistant. See [README.md](README.md) for philosophy and setup. See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions.
@@ -5,6 +9,8 @@ Personal Claude assistant. See [README.md](README.md) for philosophy and setup. 
 ## Quick Context
 
 Single Node.js process with skill-based channel system. Channels (WhatsApp, Telegram, Slack, Discord, Gmail) are skills that self-register at startup. Messages route to Claude Agent SDK running in containers (Linux VMs). Each group has isolated filesystem and memory.
+
+**Architecture**: `src/` contains the orchestrator and channel adapters (Node.js). `container/` contains the agent runner and custom skills that run inside isolated Docker/Apple Container sandboxes. They communicate via IPC.
 
 ## Key Files
 
@@ -69,10 +75,12 @@ These rules are mandatory. Violations make it impossible to audit which AI intro
 
 ### Co-author tag — required on every commit, no exceptions
 
-Every commit must include this trailer in the commit message body:
+Every commit must include a co-author trailer in the commit message body identifying which tool/model generated it. Examples:
 
 ```text
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+Co-authored-by: aider (openrouter/anthropic/claude-sonnet-4-5) <aider@aider.chat>
+Co-authored-by: aider (openrouter/moonshotai/kimi-k2.6) <aider@aider.chat>
 ```
 
 No exceptions: bug fixes, typo patches, version bumps — all of them. A commit without this tag will be treated as unattributed.
@@ -99,18 +107,39 @@ To find all Codex-authored commits: `git log --all --grep="Co-authored-by: Codex
 
 ### Aider configuration
 
-Aider is configured via `.aider.conf.yml` (gitignored). It reads `CLAUDE.md`, `README.md`, and `docs/REQUIREMENTS.md` as always-on context, auto-commits with `Co-authored-by` attribution, and runs `npm run build` as its test command. Model: `openrouter/anthropic/claude-sonnet-4-5`.
+Aider is configured via `.aider.conf.yml` (gitignored). It reads `CLAUDE.md`, `README.md`, and `docs/REQUIREMENTS.md` as always-on context, auto-commits with `Co-authored-by` attribution, and runs `npm run build` as its test command.
 
 ## Development
 
 Run commands directly—don't tell the user to run them.
 
+### Building and Type Safety
+
 ```bash
+npm run build        # Compile TypeScript to dist/
+npm run typecheck    # Type check without emitting (catch issues before build)
+npm run format:check # Check code formatting
+npm run format:fix   # Auto-fix code formatting
 npm run dev          # Run with hot reload (dev only — not suitable for persistent use on Windows)
-npm run build        # Compile TypeScript
+```
+
+### Testing
+
+```bash
+npm run test         # Run all tests once (Vitest)
+npm run test:watch   # Run tests in watch mode (re-run on file change)
+```
+
+Tests live in `src/**/*.test.ts`. When adding a feature, create a `.test.ts` file in the same directory.
+
+### Container
+
+```bash
 ./container/build.sh # Rebuild agent container (run from Git Bash, not PowerShell)
 docker build -t nanoclaw-agent:latest container/  # Windows alternative to build.sh
 ```
+
+The container image contains the agent runtime (Claude Agent SDK) and all custom skills. Rebuilding takes ~2min. Changes to skill files in `container/skills/` take effect on the next agent invocation without rebuild.
 
 ## Running on Windows
 
@@ -133,6 +162,55 @@ Stop-Process -Id <PID> -Force
 Logs are written to `logs/nanoclaw-out.log` and `logs/nanoclaw-err.log`.
 
 The agent container is **ephemeral** — it spins up per conversation and disappears when done (`docker run --rm`). It will not appear as a persistent container in Docker Desktop. Only the Node.js host process (port 3001) is persistent.
+
+## Adding Custom Skills
+
+Custom skills live in `container/skills/` and are automatically synced into `/home/node/.claude/skills/` inside every container at startup.
+
+### File Format
+
+Create a `.md` file (e.g., `container/skills/my-skill/SKILL.md`) with YAML frontmatter:
+
+```yaml
+---
+name: my-skill
+description: Does something useful
+trigger: "my command"
+model: claude-opus-4-7
+---
+```
+
+The skill markdown body becomes the prompt Claude sees. Reference any scripts in the same folder.
+
+### Python Scripts
+
+Scripts in the same folder (e.g., `scripts/my_script.py`) are available to the skill. Import them:
+
+```python
+import sys; sys.path.append('/home/node/.claude/skills/my-skill')
+from scripts.my_script import my_function
+```
+
+Scripts must be self-contained or use only Python stdlib (no pip packages unless added to `container/Dockerfile`).
+
+### Environment Variables
+
+Add new env vars to the allowlist in `src/container-runner.ts` (`buildContainerArgs()`) before they're injected into containers.
+
+### Testing Locally
+
+After adding or editing a skill, changes take effect on the next container invocation. Rebuild the container only if you've modified the Dockerfile or added pip dependencies.
+
+## Documentation
+
+See `docs/` for deeper dives:
+- **REQUIREMENTS.md** — Architecture decisions and philosophy
+- **SPEC.md** — Message format and internal protocols
+- **SECURITY.md** — Security model and isolation guarantees
+- **SDK_DEEP_DIVE.md** — How the Claude Agent SDK is integrated
+- **STABILITY.md** — Known issues and workarounds
+- **DEBUG_CHECKLIST.md** — Troubleshooting flowchart
+- **docker-sandboxes.md** — Container setup and the hypervisor model
 
 ## Troubleshooting
 
@@ -162,11 +240,21 @@ curl -s http://localhost:4040/api/tunnels | python -c "import sys,json; t=[x for
 
 The container buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps — the builder's volume retains stale files. To force a truly clean rebuild, prune the builder then re-run `./container/build.sh`.
 
-## graphify
+## Initial Setup
 
-This project has a graphify knowledge graph at graphify-out/.
+Run `/setup` (in Claude Code) to configure NanoClaw for the first time. This handles:
+- Installing Node.js dependencies
+- Authenticating with messaging platforms (WhatsApp, Telegram, etc.)
+- Building the container image
+- Setting up `.env` with secrets and API keys
+- Configuring port 3001 to stay accessible on Windows
 
-Rules:
-- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
-- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
-- After modifying code files in this session, run `python3 -c "from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path('.'))"` to keep the graph current
+For subsequent changes (adding channels, modifying trigger words), use `/customize`.
+
+## Knowledge Graph
+
+This project has a graphify knowledge graph at `graphify-out/`. The god nodes (most-connected abstractions) are: `load()`, `GroupQueue`, `main()`, `save()`, and `_get_access_token()`.
+
+**For architecture questions:** Read `graphify-out/GRAPH_REPORT.md` first for god nodes and community structure.
+
+**After modifying code:** Run `python3 -c "from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path('.'))"` to rebuild the graph incrementally (tokens/time are free after the initial build).
