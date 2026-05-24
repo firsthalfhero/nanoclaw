@@ -216,7 +216,13 @@ export function startCredentialProxy(
         // Direct Anthropic: forward as-is.
         const pathPrefix =
           upstreamUrl.pathname !== '/' ? upstreamUrl.pathname : '';
-        const upstreamPath = pathPrefix + (req.url ?? '/');
+        let upstreamPath = pathPrefix + (req.url ?? '/');
+
+        // Strip ?beta=true query param that the Claude Code SDK appends.
+        // OpenRouter does not recognize this parameter and returns 401.
+        if (useOpenRouter && upstreamPath.includes('?beta=true')) {
+          upstreamPath = upstreamPath.replace('?beta=true', '');
+        }
         logger.debug(
           { upstreamPath, model: useOpenRouter ? openrouterModel : undefined },
           'Proxy forwarding request',
