@@ -217,8 +217,21 @@ export class DiscordChannel implements Channel {
       logger.error({ err: error.message }, 'Discord client error');
     });
 
-    // Login
-    await this.client.login(this.botToken);
+    // Login — wrap so a bad token or missing intent doesn't crash the whole app
+    try {
+      await this.client.login(this.botToken);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('disallowed intents') || msg.includes('Used disallowed')) {
+        logger.error(
+          'Discord: Message Content Intent is not enabled. ' +
+          'Go to Discord Developer Portal → your app → Bot → Privileged Gateway Intents → enable Message Content Intent.',
+        );
+      } else {
+        logger.error({ err }, 'Discord: failed to connect');
+      }
+      return;
+    }
   }
 
   private async handleChatIdCommand(
