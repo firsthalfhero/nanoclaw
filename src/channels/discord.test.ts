@@ -270,9 +270,7 @@ function currentClient() {
   return clientRef.current;
 }
 
-async function triggerMessage(
-  msg: ReturnType<typeof createMessageMock>,
-) {
+async function triggerMessage(msg: ReturnType<typeof createMessageMock>) {
   const handlers = currentClient().eventHandlers.get('messageCreate') || [];
   for (const h of handlers) await h(msg);
 }
@@ -549,14 +547,8 @@ describe('DiscordChannel', () => {
 
       const fetchedChannel = await currentClient().channels.fetch();
       expect(fetchedChannel.send).toHaveBeenCalledTimes(2);
-      expect(fetchedChannel.send).toHaveBeenNthCalledWith(
-        1,
-        'x'.repeat(2000),
-      );
-      expect(fetchedChannel.send).toHaveBeenNthCalledWith(
-        2,
-        'x'.repeat(1000),
-      );
+      expect(fetchedChannel.send).toHaveBeenNthCalledWith(1, 'x'.repeat(2000));
+      expect(fetchedChannel.send).toHaveBeenNthCalledWith(2, 'x'.repeat(1000));
     });
 
     it('sends exactly one message at 2000 characters', async () => {
