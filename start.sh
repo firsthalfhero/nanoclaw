@@ -9,72 +9,59 @@ LOCK_FILE="$ROOT/logs/watchdog.lock"
 
 mkdir -p "$ROOT/logs"
 
-write_watchdog_log() {
-    local msg="$1"
-    local ts=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "$ts $msg" >> "$WATCHDOG_LOG"
-}
+# Kill EVERYTHING first - be super aggressive
+echo "🔫 Nuclear cleanup..."
 
-# Nuclear option: kill EVERYTHING nanoclaw-related
-cleanup_all() {
-    echo "🔫 Killing all NanoClaw processes..."
+# Kill old watchdog PIDs if lock file exists
+if [ -f "$LOCK_FILE" ]; then
+    OLD_PID=$(cat "$LOCK_FILE" 2>/dev/null)
+    if [ -n "$OLD_PID" ]; then
+        kill -9 $OLD_PID 2>/dev/null || true
+        echo "  Killed old watchdog $OLD_PID"
+    fi
+    rm -f "$LOCK_FILE"
+fi
 
-    # Kill watchdog scripts
-    pkill -9 -f "watchdog-script.sh" 2>/dev/null || true
+# Kill all watchdog scripts by looking in /proc
+for pid in /proc/[0-9]*/; do
+    if grep -q "watchdog-script.sh" "$pid/cmdline" 2>/dev/null; then
+        PID=$(basename "$pid")
+        kill -9 $PID 2>/dev/null || true
+        echo "  Killed watchdog PID $PID"
+    fi
+done
 
-    # Kill node processes
-    pkill -9 -f "dist/index.js" 2>/dev/null || true
-    pkill -9 node 2>/dev/null || true
+# Kill all node processes in nanoclaw
+for pid in /proc/[0-9]*/; do
+    if grep -q "nanoclaw/dist/index.js" "$pid/cmdline" 2>/dev/null; then
+        PID=$(basename "$pid")
+        kill -9 $PID 2>/dev/null || true
+        echo "  Killed node PID $PID"
+    fi
+done
 
-    # Kill any bash running watchdog
-    pkill -9 -f "watchdog" 2>/dev/null || true
+sleep 2
 
-    sleep 1
-
-    # Force kill by port if still running
-    while ss -tlnp 2>/dev/null | grep -q :3001; do
-        echo "  Force killing process on :3001..."
-        sudo fuser -k 3001/tcp 2>/dev/null || true
-        sleep 1
-    done
-
-    echo "✓ All processes cleaned"
-}
+# Verify everything is dead
+if ps aux | grep -E "watchdog-script|nanoclaw/dist" | grep -v grep | grep -v "^$"; then
+    echo "⚠️  WARNING: Some processes still alive, forcing..."
+    ps aux | grep -E "watchdog-script|nanoclaw/dist" | grep -v grep | awk '{print $2}' | xargs -r kill -9 2>/dev/null || true
+    sleep 2
+fi
 
 # Stop mode
 if [ "$1" = "--stop" ] || [ "$1" = "-stop" ]; then
-    cleanup_all
-    rm -f "$LOCK_FILE"
-
-    # Kill docker containers
-    docker ps -q --filter name=nanoclaw- 2>/dev/null | xargs -r docker kill 2>/dev/null || true
-
+    echo "✓ Stopped"
     exit 0
 fi
 
-# Start mode
-echo "================"
-echo "NanoClaw Startup"
-echo "================"
-
-cleanup_all
-
-# Verify port is free (with timeout)
-WAIT=0
-while [ $WAIT -lt 15 ]; do
-    if ! ss -tlnp 2>/dev/null | grep -q :3001; then
-        echo "✓ Port 3001 is free"
-        break
-    fi
-    echo "⏳ Waiting for port 3001 to free... ($WAIT/15)"
-    sleep 1
-    WAIT=$((WAIT + 1))
-done
-
+# Verify port is free
 if ss -tlnp 2>/dev/null | grep -q :3001; then
-    echo "❌ ERROR: Port 3001 still in use after 15s"
+    echo "❌ ERROR: Port 3001 still in use"
+    ss -tlnp 2>/dev/null | grep 3001
     exit 1
 fi
+echo "✓ Port 3001 is free"
 
 # Build
 echo "Building..."
@@ -84,9 +71,8 @@ if ! npm run build > /dev/null 2>&1; then
 fi
 echo "✓ Built"
 
-# Start watchdog
+# Start ONE watchdog only
 echo "Starting watchdog..."
-write_watchdog_log "=== Startup ==="
 
 WATCHDOG_SCRIPT="$ROOT/logs/watchdog-script.sh"
 cat > "$WATCHDOG_SCRIPT" << 'WATCHDOG'
@@ -96,35 +82,31 @@ OUT_LOG="$2"
 ERR_LOG="$3"
 WATCHDOG_LOG="$4"
 
-write_watchdog_log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$WATCHDOG_LOG"
-}
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Watchdog started" >> "$WATCHDOG_LOG"
 
 while true; do
-    write_watchdog_log "Starting NanoClaw..."
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting NanoClaw..." >> "$WATCHDOG_LOG"
     cd "$ROOT"
 
-    node dist/index.js > "$OUT_LOG" 2> "$ERR_LOG" &
+    node dist/index.js >> "$OUT_LOG" 2>> "$ERR_LOG" &
     PROC_PID=$!
 
-    write_watchdog_log "Running (PID $PROC_PID)"
-    wait $PROC_PID
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Running (PID $PROC_PID)" >> "$WATCHDOG_LOG"
+    wait $PROC_PID 2>/dev/null
     EXIT_CODE=$?
 
-    write_watchdog_log "Exit code $EXIT_CODE - restarting in 5s..."
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Exit code $EXIT_CODE - restart in 5s..." >> "$WATCHDOG_LOG"
     sleep 5
 done
 WATCHDOG
 
 chmod +x "$WATCHDOG_SCRIPT"
 
+# Start watchdog
 nohup bash "$WATCHDOG_SCRIPT" "$ROOT" "$OUT_LOG" "$ERR_LOG" "$WATCHDOG_LOG" > /dev/null 2>&1 &
 WATCHDOG_PID=$!
 
 echo "$WATCHDOG_PID" > "$LOCK_FILE"
 echo "✓ Started (watchdog PID $WATCHDOG_PID)"
 echo ""
-echo "Logs:"
-echo "  Live:    tail -f $WATCHDOG_LOG"
-echo "  Output:  tail -f $OUT_LOG"
-echo "  Errors:  tail -f $ERR_LOG"
+echo "Logs: tail -f $WATCHDOG_LOG"
