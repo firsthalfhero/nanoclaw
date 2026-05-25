@@ -135,31 +135,44 @@ Tests live in `src/**/*.test.ts`. When adding a feature, create a `.test.ts` fil
 ### Container
 
 ```bash
-./container/build.sh # Rebuild agent container (run from Git Bash, not PowerShell)
-docker build -t nanoclaw-agent:latest container/  # Windows alternative to build.sh
+./container/build.sh # Rebuild agent container (run from Git Bash or Linux shell)
+docker build -t nanoclaw-agent:latest container/  # Alternative: direct Docker command
 ```
 
 The container image contains the agent runtime (Claude Agent SDK) and all custom skills. Rebuilding takes ~2min. Changes to skill files in `container/skills/` take effect on the next agent invocation without rebuild.
 
-## Running on Windows
+## Running NanoClaw
 
-PM2 does not work reliably on Windows with this project (pino-pretty worker thread conflicts, CWD issues). Use `start.ps1` instead:
+PM2 does not work reliably with this project (pino-pretty worker thread conflicts, CWD issues). Use the start script with automatic watchdog instead.
 
-```powershell
-# Start (builds first, kills any existing instance, writes logs)
-.\start.ps1
+### Linux/macOS
 
-# Check if running
-Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue
-
-# Tail logs
-Get-Content logs\nanoclaw-out.log -Wait
+```bash
+# Start (builds first, kills any existing instance, starts watchdog, writes logs)
+./start.sh
 
 # Stop
-Stop-Process -Id <PID> -Force
+./start.sh --stop
+
+# Check logs
+tail -f logs/nanoclaw-out.log
+tail -f logs/nanoclaw-watchdog.log
 ```
 
-Logs are written to `logs/nanoclaw-out.log` and `logs/nanoclaw-err.log`.
+### Windows (Legacy)
+
+```powershell
+# Start (builds first, kills any existing instance, starts watchdog, writes logs)
+.\start.ps1
+
+# Stop
+.\start.ps1 -Stop
+
+# Check logs
+Get-Content logs\nanoclaw-out.log -Wait
+```
+
+Logs are written to `logs/nanoclaw-out.log` (stdout) and `logs/nanoclaw-err.log` (stderr).
 
 The agent container is **ephemeral** — it spins up per conversation and disappears when done (`docker run --rm`). It will not appear as a persistent container in Docker Desktop. Only the Node.js host process (port 3001) is persistent.
 
@@ -216,7 +229,10 @@ See `docs/` for deeper dives:
 
 **Multiple orphaned containers:** If NanoClaw crashes and restarts repeatedly, previous containers may keep running (holding resources). Check with `docker ps --filter "name=nanoclaw"` and kill with `docker kill <name>`. NanoClaw kills orphans automatically on startup.
 
-**Port 3001 EADDRINUSE:** A previous NanoClaw instance is still running. Find it with `Get-NetTCPConnection -LocalPort 3001` and stop it with `Stop-Process -Id <PID> -Force`. Running `.\start.ps1` handles this automatically.
+**Port 3001 EADDRINUSE:** A previous NanoClaw instance is still running.
+
+- Linux/macOS: `lsof -i :3001` to find the PID, then `kill -9 <PID>`. Running `./start.sh --stop` handles this automatically.
+- Windows: `Get-NetTCPConnection -LocalPort 3001` to find the PID, then `Stop-Process -Id <PID> -Force`. Running `.\start.ps1 -Stop` handles this automatically.
 
 **IPv4/IPv6 on Windows:** NanoClaw patches `dns.setDefaultResultOrder('ipv4first')` at startup to prevent undici happy-eyeballs failures (IPv6 ENETUNREACH on this network).
 
@@ -247,7 +263,7 @@ Run `/setup` (in Claude Code) to configure NanoClaw for the first time. This han
 - Authenticating with messaging platforms (WhatsApp, Telegram, etc.)
 - Building the container image
 - Setting up `.env` with secrets and API keys
-- Configuring port 3001 to stay accessible on Windows
+- Ensuring port 3001 is accessible (automatically handled by start scripts)
 
 For subsequent changes (adding channels, modifying trigger words), use `/customize`.
 
