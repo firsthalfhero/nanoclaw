@@ -135,31 +135,44 @@ Tests live in `src/**/*.test.ts`. When adding a feature, create a `.test.ts` fil
 ### Container
 
 ```bash
-./container/build.sh # Rebuild agent container (run from Git Bash, not PowerShell)
-docker build -t nanoclaw-agent:latest container/  # Windows alternative to build.sh
+./container/build.sh # Rebuild agent container (run from Git Bash or Linux shell)
+docker build -t nanoclaw-agent:latest container/  # Alternative: direct Docker command
 ```
 
 The container image contains the agent runtime (Claude Agent SDK) and all custom skills. Rebuilding takes ~2min. Changes to skill files in `container/skills/` take effect on the next agent invocation without rebuild.
 
-## Running on Windows
+## Running NanoClaw
 
-PM2 does not work reliably on Windows with this project (pino-pretty worker thread conflicts, CWD issues). Use `start.ps1` instead:
+PM2 does not work reliably with this project (pino-pretty worker thread conflicts, CWD issues). Use the start script with automatic watchdog instead.
 
-```powershell
-# Start (builds first, kills any existing instance, writes logs)
-.\start.ps1
+### Linux/macOS
 
-# Check if running
-Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue
-
-# Tail logs
-Get-Content logs\nanoclaw-out.log -Wait
+```bash
+# Start (builds first, kills any existing instance, starts watchdog, writes logs)
+./start.sh
 
 # Stop
-Stop-Process -Id <PID> -Force
+./start.sh --stop
+
+# Check logs
+tail -f logs/nanoclaw-out.log
+tail -f logs/nanoclaw-watchdog.log
 ```
 
-Logs are written to `logs/nanoclaw-out.log` and `logs/nanoclaw-err.log`.
+### Windows (Legacy)
+
+```powershell
+# Start (builds first, kills any existing instance, starts watchdog, writes logs)
+.\start.ps1
+
+# Stop
+.\start.ps1 -Stop
+
+# Check logs
+Get-Content logs\nanoclaw-out.log -Wait
+```
+
+Logs are written to `logs/nanoclaw-out.log` (stdout) and `logs/nanoclaw-err.log` (stderr).
 
 The agent container is **ephemeral** — it spins up per conversation and disappears when done (`docker run --rm`). It will not appear as a persistent container in Docker Desktop. Only the Node.js host process (port 3001) is persistent.
 
@@ -216,7 +229,10 @@ See `docs/` for deeper dives:
 
 **Multiple orphaned containers:** If NanoClaw crashes and restarts repeatedly, previous containers may keep running (holding resources). Check with `docker ps --filter "name=nanoclaw"` and kill with `docker kill <name>`. NanoClaw kills orphans automatically on startup.
 
-**Port 3001 EADDRINUSE:** A previous NanoClaw instance is still running. Find it with `Get-NetTCPConnection -LocalPort 3001` and stop it with `Stop-Process -Id <PID> -Force`. Running `.\start.ps1` handles this automatically.
+**Port 3001 EADDRINUSE:** A previous NanoClaw instance is still running.
+
+- Linux/macOS: `lsof -i :3001` to find the PID, then `kill -9 <PID>`. Running `./start.sh --stop` handles this automatically.
+- Windows: `Get-NetTCPConnection -LocalPort 3001` to find the PID, then `Stop-Process -Id <PID> -Force`. Running `.\start.ps1 -Stop` handles this automatically.
 
 **IPv4/IPv6 on Windows:** NanoClaw patches `dns.setDefaultResultOrder('ipv4first')` at startup to prevent undici happy-eyeballs failures (IPv6 ENETUNREACH on this network).
 
@@ -247,9 +263,87 @@ Run `/setup` (in Claude Code) to configure NanoClaw for the first time. This han
 - Authenticating with messaging platforms (WhatsApp, Telegram, etc.)
 - Building the container image
 - Setting up `.env` with secrets and API keys
-- Configuring port 3001 to stay accessible on Windows
+- Ensuring port 3001 is accessible (automatically handled by start scripts)
 
 For subsequent changes (adding channels, modifying trigger words), use `/customize`.
+
+## Discord Channel
+
+Discord support is fully integrated. The bot self-registers at startup and manages slash commands, message delivery, and audio transcription.
+
+### Setup
+
+1. **Create a Discord Application:**
+   - Visit [Discord Developer Portal](https://discord.com/developers/applications)
+   - Click "New Application"
+   - Go to "Bot" tab → "Add Bot"
+   - Copy the token
+
+2. **Set Environment Variable:**
+   ```bash
+   DISCORD_BOT_TOKEN=your_bot_token_here
+   ```
+
+3. **Configure Bot Permissions:**
+   - OAuth2 → URL Generator
+   - Scopes: `bot`
+   - Permissions: `Send Messages`, `Read Message History`, `Embed Links`, `Attach Files`, `Use Slash Commands`
+   - Use generated URL to add bot to your server
+
+4. **Register a Channel with the Group:**
+   - Send `/chatid` command in any Discord channel or DM
+   - Bot responds with Chat ID (format: `dc:CHANNEL_ID` or `dc:dm:USER_ID` or `dc:thread:THREAD_ID`)
+   - Add this ID to the group's `channels` in `.env`
+
+### Features
+
+- **Slash Commands:**
+  - `/chatid` — Get the Chat ID for group registration
+  - `/ping` — Check if the bot is online
+
+- **Message Handling:**
+  - Text messages, threads, and DMs supported
+  - Trigger pattern and group `requiresTrigger` settings respected
+  - Bot mentions counted as valid triggers
+
+- **Audio Transcription:**
+  - Audio attachments (MP3, WAV, OGG) automatically transcribed via Google Gemini
+  - Requires `GOOGLE_GEMINI_API_KEY` in `.env`
+  - Transcribed text forwarded to agent as `[Voice transcription: ...]`
+
+- **Message Limits:**
+  - Discord enforces 2000-character limit; long messages auto-split
+  - Attachments downloaded and saved to group `media/` folder
+
+### Implementation Details
+
+- **File:** `src/channels/discord.ts` (507 lines)
+- **Tests:** `src/channels/discord.test.ts` (731 lines, 33 tests passing)
+- **JID Format:** 
+  - Channels: `dc:CHANNEL_ID`
+  - Threads: `dc:thread:THREAD_ID`
+  - DMs: `dc:dm:USER_ID`
+
+- **Registration:** Auto-registers in `src/channels/index.ts` on startup
+- **Message Flow:** Incoming Discord messages → JID conversion → trigger check → agent invocation → response routed back to channel
+
+### Troubleshooting
+
+**Bot doesn't respond to messages:**
+- Ensure the bot has "Read Message History" and "Send Messages" permissions in the channel
+- Check that the channel is registered (`/chatid` returns a valid ID)
+- Verify `DISCORD_BOT_TOKEN` is set and valid
+- If `requiresTrigger: true` on the group, message must contain trigger word or mention the bot
+
+**Audio transcription not working:**
+- Ensure `GOOGLE_GEMINI_API_KEY` is set in `.env`
+- Check that the file is a valid audio format (MP3, WAV, OGG)
+- Review agent logs for transcription errors
+
+**Slash commands not visible:**
+- Permissions may not include "Use Slash Commands" — update bot invite URL
+- Try kicking and re-adding the bot to the server
+- Wait a few minutes for Discord to sync permissions
 
 ## Knowledge Graph
 
