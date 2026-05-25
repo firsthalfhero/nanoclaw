@@ -46,7 +46,8 @@ sleep 2
 if ps aux | grep -E "watchdog-script|nanoclaw/dist" | grep -v grep | grep -v "^$"; then
     echo "⚠️  WARNING: Some processes still alive, forcing..."
     ps aux | grep -E "watchdog-script|nanoclaw/dist" | grep -v grep | awk '{print $2}' | xargs -r kill -9 2>/dev/null || true
-    sleep 2
+    echo "  Waiting for port release..."
+    sleep 3
 fi
 
 # Stop mode
@@ -56,12 +57,20 @@ if [ "$1" = "--stop" ] || [ "$1" = "-stop" ]; then
 fi
 
 # Verify port is free
-if ss -tlnp 2>/dev/null | grep -q :3001; then
-    echo "❌ ERROR: Port 3001 still in use"
-    ss -tlnp 2>/dev/null | grep 3001
-    exit 1
-fi
-echo "✓ Port 3001 is free"
+echo "Checking port 3001..."
+for i in {1..10}; do
+    if ! ss -tlnp 2>/dev/null | grep -q :3001; then
+        echo "✓ Port 3001 is free"
+        break
+    fi
+    if [ $i -eq 10 ]; then
+        echo "❌ ERROR: Port 3001 still in use after 10s"
+        ss -tlnp 2>/dev/null | grep 3001
+        exit 1
+    fi
+    echo "  Port still in use, waiting... ($i/10)"
+    sleep 1
+done
 
 # Build
 echo "Building..."
@@ -85,6 +94,19 @@ WATCHDOG_LOG="$4"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Watchdog started" >> "$WATCHDOG_LOG"
 
 while true; do
+    # Wait for port to be free before attempting start
+    for i in {1..12}; do
+        if ! ss -tlnp 2>/dev/null | grep -q :3001; then
+            break
+        fi
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Port 3001 busy, waiting... ($i/12)" >> "$WATCHDOG_LOG"
+        sleep 5
+        if [ $i -eq 12 ]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Port never freed, giving up" >> "$WATCHDOG_LOG"
+            exit 1
+        fi
+    done
+
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting NanoClaw..." >> "$WATCHDOG_LOG"
     cd "$ROOT"
 
