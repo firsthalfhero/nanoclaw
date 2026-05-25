@@ -436,7 +436,7 @@ export class DiscordChannel implements Channel {
   }
 
   isConnected(): boolean {
-    return this.client?.isReady ?? false;
+    return this.client?.isReady() ?? false;
   }
 
   ownsJid(jid: string): boolean {
