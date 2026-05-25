@@ -267,6 +267,84 @@ Run `/setup` (in Claude Code) to configure NanoClaw for the first time. This han
 
 For subsequent changes (adding channels, modifying trigger words), use `/customize`.
 
+## Discord Channel
+
+Discord support is fully integrated. The bot self-registers at startup and manages slash commands, message delivery, and audio transcription.
+
+### Setup
+
+1. **Create a Discord Application:**
+   - Visit [Discord Developer Portal](https://discord.com/developers/applications)
+   - Click "New Application"
+   - Go to "Bot" tab → "Add Bot"
+   - Copy the token
+
+2. **Set Environment Variable:**
+   ```bash
+   DISCORD_BOT_TOKEN=your_bot_token_here
+   ```
+
+3. **Configure Bot Permissions:**
+   - OAuth2 → URL Generator
+   - Scopes: `bot`
+   - Permissions: `Send Messages`, `Read Message History`, `Embed Links`, `Attach Files`, `Use Slash Commands`
+   - Use generated URL to add bot to your server
+
+4. **Register a Channel with the Group:**
+   - Send `/chatid` command in any Discord channel or DM
+   - Bot responds with Chat ID (format: `dc:CHANNEL_ID` or `dc:dm:USER_ID` or `dc:thread:THREAD_ID`)
+   - Add this ID to the group's `channels` in `.env`
+
+### Features
+
+- **Slash Commands:**
+  - `/chatid` — Get the Chat ID for group registration
+  - `/ping` — Check if the bot is online
+
+- **Message Handling:**
+  - Text messages, threads, and DMs supported
+  - Trigger pattern and group `requiresTrigger` settings respected
+  - Bot mentions counted as valid triggers
+
+- **Audio Transcription:**
+  - Audio attachments (MP3, WAV, OGG) automatically transcribed via Google Gemini
+  - Requires `GOOGLE_GEMINI_API_KEY` in `.env`
+  - Transcribed text forwarded to agent as `[Voice transcription: ...]`
+
+- **Message Limits:**
+  - Discord enforces 2000-character limit; long messages auto-split
+  - Attachments downloaded and saved to group `media/` folder
+
+### Implementation Details
+
+- **File:** `src/channels/discord.ts` (507 lines)
+- **Tests:** `src/channels/discord.test.ts` (731 lines, 33 tests passing)
+- **JID Format:** 
+  - Channels: `dc:CHANNEL_ID`
+  - Threads: `dc:thread:THREAD_ID`
+  - DMs: `dc:dm:USER_ID`
+
+- **Registration:** Auto-registers in `src/channels/index.ts` on startup
+- **Message Flow:** Incoming Discord messages → JID conversion → trigger check → agent invocation → response routed back to channel
+
+### Troubleshooting
+
+**Bot doesn't respond to messages:**
+- Ensure the bot has "Read Message History" and "Send Messages" permissions in the channel
+- Check that the channel is registered (`/chatid` returns a valid ID)
+- Verify `DISCORD_BOT_TOKEN` is set and valid
+- If `requiresTrigger: true` on the group, message must contain trigger word or mention the bot
+
+**Audio transcription not working:**
+- Ensure `GOOGLE_GEMINI_API_KEY` is set in `.env`
+- Check that the file is a valid audio format (MP3, WAV, OGG)
+- Review agent logs for transcription errors
+
+**Slash commands not visible:**
+- Permissions may not include "Use Slash Commands" — update bot invite URL
+- Try kicking and re-adding the bot to the server
+- Wait a few minutes for Discord to sync permissions
+
 ## Knowledge Graph
 
 This project has a graphify knowledge graph at `graphify-out/`. The god nodes (most-connected abstractions) are: `load()`, `GroupQueue`, `main()`, `save()`, and `_get_access_token()`.

@@ -167,9 +167,7 @@ export class DiscordChannel implements Channel {
         'Discord bot connected',
       );
       console.log(`\n  Discord bot: ${readyClient.user.tag}`);
-      console.log(
-        `  Use /chatid to get a channel's registration ID\n`,
-      );
+      console.log(`  Use /chatid to get a channel's registration ID\n`);
 
       // Register commands globally
       try {
@@ -184,19 +182,16 @@ export class DiscordChannel implements Channel {
     });
 
     // Handle slash command interactions
-    this.client.on(
-      Events.InteractionCreate,
-      async (interaction) => {
-        if (!interaction.isChatInputCommand()) return;
+    this.client.on(Events.InteractionCreate, async (interaction) => {
+      if (!interaction.isChatInputCommand()) return;
 
-        const { commandName } = interaction;
-        if (commandName === 'chatid') {
-          await this.handleChatIdCommand(interaction);
-        } else if (commandName === 'ping') {
-          await interaction.reply(`${ASSISTANT_NAME} is online.`);
-        }
-      },
-    );
+      const { commandName } = interaction;
+      if (commandName === 'chatid') {
+        await this.handleChatIdCommand(interaction);
+      } else if (commandName === 'ping') {
+        await interaction.reply(`${ASSISTANT_NAME} is online.`);
+      }
+    });
 
     // Handle incoming messages
     this.client.on(Events.MessageCreate, async (message: Message) => {
@@ -266,9 +261,7 @@ export class DiscordChannel implements Channel {
     const content = message.content || '';
     const timestamp = message.createdAt.toISOString();
     const senderName =
-      message.author.displayName ||
-      message.author.username ||
-      'Unknown';
+      message.author.displayName || message.author.username || 'Unknown';
     const sender = message.author.id;
     const msgId = message.id;
 
@@ -278,13 +271,7 @@ export class DiscordChannel implements Channel {
       : (channel as TextChannel | ThreadChannel).name || chatJid;
 
     const isGroup = !isDm;
-    this.opts.onChatMetadata(
-      chatJid,
-      timestamp,
-      chatName,
-      'discord',
-      isGroup,
-    );
+    this.opts.onChatMetadata(chatJid, timestamp, chatName, 'discord', isGroup);
 
     const group = this.opts.registeredGroups()[chatJid];
     if (!group) {
@@ -355,10 +342,8 @@ export class DiscordChannel implements Channel {
         const res = await fetch(attachment.url);
         const buf = await res.arrayBuffer();
 
-        const ext =
-          path.extname(attachment.name || 'file').slice(1) || 'bin';
-        const typeLabel =
-          attachment.contentType?.split('/')[0] || 'file';
+        const ext = path.extname(attachment.name || 'file').slice(1) || 'bin';
+        const typeLabel = attachment.contentType?.split('/')[0] || 'file';
         const fname = `${typeLabel}_${message.id}_${Date.now()}.${ext}`;
         const dest = path.join(mediaDir, fname);
         fs.writeFileSync(dest, Buffer.from(buf));
@@ -369,8 +354,7 @@ export class DiscordChannel implements Channel {
         if (attachment.contentType?.startsWith('audio/')) {
           const envVars = readEnvFile(['GOOGLE_GEMINI_API_KEY']);
           const geminiKey =
-            process.env.GOOGLE_GEMINI_API_KEY ||
-            envVars.GOOGLE_GEMINI_API_KEY;
+            process.env.GOOGLE_GEMINI_API_KEY || envVars.GOOGLE_GEMINI_API_KEY;
           if (geminiKey) {
             logger.info(
               { dest, mimeHint: attachment.contentType },
@@ -382,8 +366,7 @@ export class DiscordChannel implements Channel {
                 id: `${message.id}_audio_${Date.now()}`,
                 chat_jid: chatJid,
                 sender: message.author.id,
-                sender_name:
-                  message.author.displayName || 'Unknown',
+                sender_name: message.author.displayName || 'Unknown',
                 content: `[Voice transcription: ${transcript}]`,
                 timestamp: message.createdAt.toISOString(),
                 is_from_me: false,
@@ -434,10 +417,7 @@ export class DiscordChannel implements Channel {
           channel instanceof DMChannel
         )
       ) {
-        logger.warn(
-          { jid },
-          'Could not resolve Discord channel for JID',
-        );
+        logger.warn({ jid }, 'Could not resolve Discord channel for JID');
         return;
       }
 
@@ -445,14 +425,8 @@ export class DiscordChannel implements Channel {
         await channel.send(text);
       } else {
         // Split into chunks respecting Discord's 2000 char limit
-        for (
-          let i = 0;
-          i < text.length;
-          i += MAX_DISCORD_MESSAGE_LENGTH
-        ) {
-          await channel.send(
-            text.slice(i, i + MAX_DISCORD_MESSAGE_LENGTH),
-          );
+        for (let i = 0; i < text.length; i += MAX_DISCORD_MESSAGE_LENGTH) {
+          await channel.send(text.slice(i, i + MAX_DISCORD_MESSAGE_LENGTH));
         }
       }
       logger.info({ jid, length: text.length }, 'Discord message sent');
@@ -490,10 +464,7 @@ export class DiscordChannel implements Channel {
         await channel.sendTyping();
       }
     } catch (err) {
-      logger.debug(
-        { jid, err },
-        'Failed to send Discord typing indicator',
-      );
+      logger.debug({ jid, err }, 'Failed to send Discord typing indicator');
     }
   }
 
