@@ -1,8 +1,74 @@
-# Start NanoClaw with watchdog — restarts automatically if it crashes or is killed by sleep/lock.
-# Usage: .\start.ps1 [-Debug]
+# Start or stop NanoClaw with watchdog — restarts automatically if it crashes or is killed by sleep/lock.
+# Usage: .\start.ps1 [-Stop] [-Debug]
+# Also supports --stop / --debug for convenience.
 param(
+    [switch]$Stop,
     [switch]$Debug
 )
+
+# Support --stop / --debug style arguments
+if ($args -contains "--stop" -or $args -contains "-stop") {
+    $Stop = $true
+}
+if ($args -contains "--debug" -or $args -contains "-debug") {
+    $Debug = $true
+}
+
+$root        = $PSScriptRoot
+$outLog      = "$root\logs\nanoclaw-out.log"
+$errLog      = "$root\logs\nanoclaw-err.log"
+$watchdogLog = "$root\logs\nanoclaw-watchdog.log"
+$lockFile    = "$root\logs\watchdog.lock"
+
+function Write-WatchdogLog($msg) {
+    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    "$ts $msg" | Out-File -FilePath $watchdogLog -Append
+}
+
+# --- Stop mode ---
+if ($Stop) {
+    Write-Host "Stopping NanoClaw..." -ForegroundColor Yellow
+
+    # Kill watchdog via lock file
+    if (Test-Path $lockFile) {
+        $lockPid = Get-Content $lockFile -ErrorAction SilentlyContinue
+        if ($lockPid -and (Get-Process -Id $lockPid -ErrorAction SilentlyContinue)) {
+            Write-Host "Stopping watchdog (PID $lockPid)..." -ForegroundColor Yellow
+            Stop-Process -Id $lockPid -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
+    }
+
+    # Kill any process holding port 3001
+    $existing = Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+    if ($existing) {
+        foreach ($procId in $existing) {
+            Write-Host "Stopping process on port 3001 (PID $procId)..." -ForegroundColor Yellow
+            Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # Kill agent containers
+    $containers = & docker ps -q --filter name=nanoclaw- 2>$null
+    if ($containers) {
+        Write-Host "Killing agent containers..." -ForegroundColor Yellow
+        $containers | ForEach-Object { & docker kill $_ 2>$null | Out-Null }
+    }
+
+    # Give processes a moment to exit
+    Start-Sleep -Seconds 2
+
+    # Verify nothing is left on port 3001
+    $remaining = Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue
+    if (-not $remaining) {
+        Write-Host "NanoClaw stopped successfully." -ForegroundColor Green
+    } else {
+        Write-Host "WARNING: Port 3001 may still be in use." -ForegroundColor Yellow
+    }
+    exit 0
+}
+
+# --- Start mode (original behavior) ---
 
 # Check if Docker is running
 try {
@@ -14,16 +80,6 @@ try {
     Write-Host "FATAL: Docker is not running. NanoClaw requires Docker to be running." -ForegroundColor Red
     Write-Host "Please start Docker Desktop or the Docker service and try again." -ForegroundColor Red
     exit 1
-}
-
-$root        = $PSScriptRoot
-$outLog      = "$root\logs\nanoclaw-out.log"
-$errLog      = "$root\logs\nanoclaw-err.log"
-$watchdogLog = "$root\logs\nanoclaw-watchdog.log"
-
-function Write-WatchdogLog($msg) {
-    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    "$ts $msg" | Out-File -FilePath $watchdogLog -Append
 }
 
 function Show-CompiledProxyCheck {
@@ -53,17 +109,6 @@ function Show-CompiledProxyCheck {
 
 # Ensure logs dir exists
 New-Item -ItemType Directory -Force -Path "$root\logs" | Out-Null
-
-# Use a lock file to prevent multiple watchdog instances.
-$lockFile = "$root\logs\watchdog.lock"
-if (Test-Path $lockFile) {
-    $lockPid = Get-Content $lockFile -ErrorAction SilentlyContinue
-    if ($lockPid -and (Get-Process -Id $lockPid -ErrorAction SilentlyContinue)) {
-        Write-Host "Stopping existing NanoClaw watchdog (PID $lockPid)..." -ForegroundColor Yellow
-        Stop-Process -Id $lockPid -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 1
-    }
-}
 
 # Kill any existing NanoClaw process holding port 3001
 $existing = Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess

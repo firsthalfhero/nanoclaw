@@ -85,6 +85,7 @@ function createTestOpts(
         folder: 'test-group',
         trigger: '@Andy',
         added_at: '2024-01-01T00:00:00.000Z',
+        requiresTrigger: false,
       },
     })),
     ...overrides,
@@ -438,7 +439,17 @@ describe('TelegramChannel', () => {
 
   describe('@mention translation', () => {
     it('translates @bot_username mention to trigger format', async () => {
-      const opts = createTestOpts();
+      const opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({
+          'tg:100200300': {
+            name: 'Test Group',
+            folder: 'test-group',
+            trigger: '@Andy',
+            added_at: '2024-01-01T00:00:00.000Z',
+            requiresTrigger: true,
+          },
+        })),
+      });
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
 
@@ -457,7 +468,17 @@ describe('TelegramChannel', () => {
     });
 
     it('does not translate if message already matches trigger', async () => {
-      const opts = createTestOpts();
+      const opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({
+          'tg:100200300': {
+            name: 'Test Group',
+            folder: 'test-group',
+            trigger: '@Andy',
+            added_at: '2024-01-01T00:00:00.000Z',
+            requiresTrigger: true,
+          },
+        })),
+      });
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
 
@@ -496,7 +517,17 @@ describe('TelegramChannel', () => {
     });
 
     it('handles mention in middle of message', async () => {
-      const opts = createTestOpts();
+      const opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({
+          'tg:100200300': {
+            name: 'Test Group',
+            folder: 'test-group',
+            trigger: '@Andy',
+            added_at: '2024-01-01T00:00:00.000Z',
+            requiresTrigger: true,
+          },
+        })),
+      });
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
 
