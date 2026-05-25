@@ -143,36 +143,31 @@ The container image contains the agent runtime (Claude Agent SDK) and all custom
 
 ## Running NanoClaw
 
-PM2 does not work reliably with this project (pino-pretty worker thread conflicts, CWD issues). Use the start script with automatic watchdog instead.
+NanoClaw runs as a systemd service for automatic restart-on-crash, logging, and lifecycle management. Do not use `start.sh` directly — it's a thin wrapper around systemctl for convenience.
 
 ### Linux/macOS
 
 ```bash
-# Start (builds first, kills any existing instance, starts watchdog, writes logs)
-./start.sh
+# Start (builds first, then starts systemd service)
+./start.sh start
 
 # Stop
-./start.sh --stop
+./start.sh stop
 
-# Check logs
-tail -f logs/nanoclaw-out.log
-tail -f logs/nanoclaw-watchdog.log
+# Restart
+./start.sh restart
+
+# Check status
+systemctl status nanoclaw
+
+# View logs in real-time
+journalctl -u nanoclaw -f
+
+# View logs since boot
+journalctl -u nanoclaw --since today
 ```
 
-### Windows (Legacy)
-
-```powershell
-# Start (builds first, kills any existing instance, starts watchdog, writes logs)
-.\start.ps1
-
-# Stop
-.\start.ps1 -Stop
-
-# Check logs
-Get-Content logs\nanoclaw-out.log -Wait
-```
-
-Logs are written to `logs/nanoclaw-out.log` (stdout) and `logs/nanoclaw-err.log` (stderr).
+Systemd automatically restarts NanoClaw on crash with 5-second delay (`Restart=always`, `RestartSec=5` in the service file). The service starts on boot and is enabled by default.
 
 The agent container is **ephemeral** — it spins up per conversation and disappears when done (`docker run --rm`). It will not appear as a persistent container in Docker Desktop. Only the Node.js host process (port 3001) is persistent.
 
@@ -231,8 +226,8 @@ See `docs/` for deeper dives:
 
 **Port 3001 EADDRINUSE:** A previous NanoClaw instance is still running.
 
-- Linux/macOS: `lsof -i :3001` to find the PID, then `kill -9 <PID>`. Running `./start.sh --stop` handles this automatically.
-- Windows: `Get-NetTCPConnection -LocalPort 3001` to find the PID, then `Stop-Process -Id <PID> -Force`. Running `.\start.ps1 -Stop` handles this automatically.
+- Linux/macOS: `lsof -i :3001` to find the PID, then `kill -9 <PID>`. Or run `./start.sh stop` to cleanly stop the systemd service.
+- Windows (Legacy): `Get-NetTCPConnection -LocalPort 3001` to find the PID, then `Stop-Process -Id <PID> -Force`.
 
 **IPv4/IPv6 on Windows:** NanoClaw patches `dns.setDefaultResultOrder('ipv4first')` at startup to prevent undici happy-eyeballs failures (IPv6 ENETUNREACH on this network).
 
