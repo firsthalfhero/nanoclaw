@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  nanoclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - AGILE_API_BASE=http://agilelife.home
+      - AGILE_API_TIMEOUT=10
+    volumes:
+      - ./skill:/app/skills
