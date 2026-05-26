@@ -22,6 +22,7 @@ import { readEnvFile } from './env.js';
 import {
   CONTAINER_HOST_GATEWAY,
   CONTAINER_RUNTIME_BIN,
+  hostDnsArgs,
   hostGatewayArgs,
   readonlyMountArgs,
   stopContainer,
@@ -130,8 +131,10 @@ function buildVolumeMounts(
 
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
+  const disabledSkills = ['openproject']; // Disabled skills
   if (fs.existsSync(skillsSrc)) {
     for (const skillDir of fs.readdirSync(skillsSrc)) {
+      if (disabledSkills.includes(skillDir)) continue;
       const srcDir = path.join(skillsSrc, skillDir);
       if (!fs.statSync(srcDir).isDirectory()) continue;
       const dstDir = path.join(skillsDst, skillDir);
@@ -247,6 +250,7 @@ function buildContainerArgs(
   }
 
   args.push(...hostGatewayArgs());
+  args.push(...hostDnsArgs());
 
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
