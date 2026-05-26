@@ -40,18 +40,11 @@ describe('fallbackToGeminiApi', () => {
     );
 
     const [, options] = fetchMock.mock.calls[0];
-    expect(JSON.parse(options.body)).toEqual({
-      contents: [
-        {
-          parts: [
-            {
-              text: 'Use Google Search grounding for any factual claim that could be time-sensitive or stale. Base the answer on grounded search results from websites and cite the websites you used. If you cannot verify the answer with grounding, say so.\n\nUser request: Who is the President of the USA?',
-            },
-          ],
-        },
-      ],
-      tools: [{ google_search: {} }],
-    });
+    const body = JSON.parse(options.body);
+    expect(body.contents).toEqual([{ parts: [{ text: 'Who is the President of the USA?' }] }]);
+    expect(body.tools).toEqual([{ google_search: {} }]);
+    expect(body.systemInstruction.parts[0].text).toContain('You are Pip');
+    expect(body.systemInstruction.parts[0].text).toContain('Use Google Search grounding');
     expect(result).toEqual({
       result: {
         text: 'Grounded answer\n\nSources:\nhttps://example.com',
@@ -63,7 +56,7 @@ describe('fallbackToGeminiApi', () => {
     });
   });
 
-  it('rejects successful but ungrounded responses', async () => {
+  it('returns ungrounded responses with grounded: false', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -84,12 +77,13 @@ describe('fallbackToGeminiApi', () => {
         fetchMock as any,
       ),
     ).resolves.toEqual({
-      result: null,
-      error: {
-        status: 200,
-        message:
-          'Gemini returned a response without grounded website sources for a fallback request that requires fresh web verification.',
+      result: {
+        text: 'Ungrounded answer',
+        model: 'Gemini 2.5 Flash',
+        grounded: false,
+        sources: [],
       },
+      error: null,
     });
   });
 

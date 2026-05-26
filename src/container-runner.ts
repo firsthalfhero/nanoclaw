@@ -396,6 +396,7 @@ export async function runContainerAgent(
               },
               'Container output marker parsed',
             );
+            hadStreamingOutput = true;
           } catch (err) {
             logger.warn(
               {
