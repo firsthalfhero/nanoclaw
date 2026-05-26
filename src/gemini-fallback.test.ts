@@ -41,10 +41,14 @@ describe('fallbackToGeminiApi', () => {
 
     const [, options] = fetchMock.mock.calls[0];
     const body = JSON.parse(options.body);
-    expect(body.contents).toEqual([{ parts: [{ text: 'Who is the President of the USA?' }] }]);
+    expect(body.contents).toEqual([
+      { parts: [{ text: 'Who is the President of the USA?' }] },
+    ]);
     expect(body.tools).toEqual([{ google_search: {} }]);
     expect(body.systemInstruction.parts[0].text).toContain('You are Pip');
-    expect(body.systemInstruction.parts[0].text).toContain('Use Google Search grounding');
+    expect(body.systemInstruction.parts[0].text).toContain(
+      'Use Google Search grounding',
+    );
     expect(result).toEqual({
       result: {
         text: 'Grounded answer\n\nSources:\nhttps://example.com',
