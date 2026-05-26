@@ -49,6 +49,25 @@ export function hostGatewayArgs(): string[] {
   return [];
 }
 
+/**
+ * CLI args that point the container's DNS at the host's dnsmasq so that
+ * .home names (e.g. agilelife.home) resolve correctly inside agent containers.
+ * Only needed on Linux where dnsmasq listens on the docker0 bridge IP.
+ */
+export function hostDnsArgs(): string[] {
+  if (os.platform() !== 'linux') return [];
+
+  if (fs.existsSync('/proc/sys/fs/binfmt_misc/WSLInterop')) return [];
+
+  const ifaces = os.networkInterfaces();
+  const docker0 = ifaces['docker0'];
+  if (docker0) {
+    const ipv4 = docker0.find((a) => a.family === 'IPv4');
+    if (ipv4) return [`--dns=${ipv4.address}`];
+  }
+  return [];
+}
+
 /** Returns CLI args for a readonly bind mount. */
 export function readonlyMountArgs(
   hostPath: string,
