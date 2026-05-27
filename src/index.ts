@@ -84,7 +84,7 @@ import {
   shouldDropMessage,
 } from './sender-allowlist.js';
 import { startSchedulerLoop } from './task-scheduler.js';
-import { Channel, NewMessage, RegisteredGroup } from './types.js';
+import { Channel, NewMessage, RegisteredGroup, ScheduledTask } from './types.js';
 import { logger } from './logger.js';
 
 // Re-export for backwards compatibility during refactor
@@ -697,6 +697,77 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   return true;
 }
 
+function formatTasksContext(tasks: ScheduledTask[], groupFolder: string, isMain: boolean): string {
+  const visibleTasks = isMain ? tasks : tasks.filter((t) => t.group_folder === groupFolder);
+
+  if (visibleTasks.length === 0) {
+    return '';
+  }
+
+  const now = new Date();
+  const upcoming: ScheduledTask[] = [];
+  const overdue: ScheduledTask[] = [];
+  const paused: ScheduledTask[] = [];
+
+  for (const task of visibleTasks) {
+    if (task.status === 'paused' || task.status === 'completed') {
+      paused.push(task);
+    } else if (task.next_run) {
+      const nextRun = new Date(task.next_run);
+      if (nextRun <= now) {
+        overdue.push(task);
+      } else {
+        upcoming.push(task);
+      }
+    }
+  }
+
+  // Sort by next run time
+  upcoming.sort((a, b) => (a.next_run || '').localeCompare(b.next_run || ''));
+  overdue.sort((a, b) => (a.next_run || '').localeCompare(b.next_run || ''));
+
+  const lines: string[] = [
+    '## Scheduled Tasks Status',
+    `You have ${visibleTasks.length} scheduled task(s):`,
+    '',
+  ];
+
+  if (overdue.length > 0) {
+    lines.push(`⚠️  **${overdue.length} OVERDUE** (should have run):`);
+    for (const task of overdue) {
+      const nextRun = task.next_run ? new Date(task.next_run).toLocaleString() : 'Unknown';
+      lines.push(`  - **${task.id}** (${task.schedule_type}): due ${nextRun}`);
+      if (task.last_result) lines.push(`    Last: ${task.last_result.slice(0, 80)}`);
+    }
+    lines.push('');
+  }
+
+  if (upcoming.length > 0) {
+    lines.push(`✓ **${upcoming.length} Upcoming:**`);
+    for (const task of upcoming.slice(0, 5)) {
+      const nextRun = task.next_run ? new Date(task.next_run).toLocaleString() : 'Unknown';
+      lines.push(`  - **${task.id}** (${task.schedule_type}): next ${nextRun}`);
+    }
+    if (upcoming.length > 5) {
+      lines.push(`  ... and ${upcoming.length - 5} more`);
+    }
+    lines.push('');
+  }
+
+  if (paused.length > 0) {
+    lines.push(`⏸️  **${paused.length} Paused/Completed:**`);
+    for (const task of paused.slice(0, 3)) {
+      lines.push(`  - ${task.id} (${task.status})`);
+    }
+    if (paused.length > 3) {
+      lines.push(`  ... and ${paused.length - 3} more`);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
 async function runAgent(
   group: RegisteredGroup,
   prompt: string,
@@ -731,6 +802,10 @@ async function runAgent(
     new Set(Object.keys(registeredGroups)),
   );
 
+  // Inject scheduled task context into the agent's prompt
+  const taskContext = formatTasksContext(tasks, group.folder, isMain);
+  const promptWithTaskContext = taskContext ? `${taskContext}\n\n${prompt}` : prompt;
+
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
@@ -746,7 +821,7 @@ async function runAgent(
     const output = await runContainerAgent(
       group,
       {
-        prompt,
+        prompt: promptWithTaskContext,
         sessionId,
         groupFolder: group.folder,
         chatJid,
