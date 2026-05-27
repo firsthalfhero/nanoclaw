@@ -206,6 +206,9 @@ function buildContainerArgs(
     `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
   );
 
+  // Agile Life API on hp-server.home network
+  args.push('-e', 'AGILE_API_BASE=http://agilelife-api-1:3456');
+
   const openrouterEnv = readEnvFile(['OPENROUTER_API_KEY', 'OPENROUTER_MODEL']);
   const useOpenRouter = !!(
     openrouterEnv['OPENROUTER_API_KEY'] && openrouterEnv['OPENROUTER_MODEL']
