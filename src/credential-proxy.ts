@@ -114,6 +114,13 @@ export function startCredentialProxy(
   const oauthToken =
     secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.ANTHROPIC_AUTH_TOKEN;
 
+  // Validate OpenRouter configuration
+  if (openrouterKey && !openrouterModel) {
+    logger.error(
+      'OPENROUTER_API_KEY is set but OPENROUTER_MODEL is not — OpenRouter mode disabled. Set OPENROUTER_MODEL to enable OpenRouter (e.g., "nvidia/nemotron-3-super-120b-a12b")',
+    );
+  }
+
   // OpenRouter's Anthropic-compat endpoint lives under /api (i.e. /api/v1/messages).
   // Setting the base to openrouter.ai/api means the container's /v1/messages path
   // gets prepended with /api by the pathPrefix logic below.
@@ -126,7 +133,7 @@ export function startCredentialProxy(
 
   if (useOpenRouter) {
     logger.info(
-      { model: openrouterModel },
+      { model: openrouterModel, key: `${openrouterKey?.slice(0, 8)}...` },
       'Credential proxy: OpenRouter mode active',
     );
     if (!openrouterReferer && !openrouterTitle) {
@@ -134,6 +141,11 @@ export function startCredentialProxy(
         'OpenRouter mode active but neither OPENROUTER_REFERER nor OPENROUTER_TITLE is set — requests may be rejected by OpenRouter',
       );
     }
+  } else {
+    logger.info(
+      { authMode, upstreamBase },
+      'Credential proxy: Anthropic/Claude mode active',
+    );
   }
 
   return new Promise((resolve, reject) => {
@@ -326,12 +338,29 @@ export function startCredentialProxy(
       });
     });
 
+    // Enable SO_REUSEADDR to allow binding to port in TIME_WAIT state
+    server.on('connection', (socket) => {
+      socket.setKeepAlive(true);
+    });
+
     server.listen(port, host, () => {
       logger.info({ port, host, authMode }, 'Credential proxy started');
       resolve(server);
     });
 
-    server.on('error', reject);
+    server.on('error', (err: any) => {
+      if (err.code === 'EADDRINUSE') {
+        logger.error({ port, err }, 'Port already in use, retrying in 2 seconds...');
+        setTimeout(() => {
+          server.listen(port, host, () => {
+            logger.info({ port, host, authMode }, 'Credential proxy started (retry)');
+            resolve(server);
+          });
+        }, 2000);
+      } else {
+        reject(err);
+      }
+    });
   });
 }
 
