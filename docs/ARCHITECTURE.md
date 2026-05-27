@@ -13,7 +13,7 @@ NanoClaw is a single Node.js process (the **host**) that:
 1. Receives messages from one or more messaging channels (WhatsApp, Telegram, Discord, Slack)
 2. Stores every message in SQLite
 3. Polls for new messages and spawns an ephemeral Docker container per invocation
-4. Runs the Claude Agent SDK inside the container against the conversation history
+4. Runs the Claude Agent SDK (via Claude Code CLI) inside the container against the conversation history
 5. Routes the agent's reply back to the channel
 
 The host process owns all secrets and privileged operations. Containers run untrusted user input in isolation and communicate back only through a narrow IPC surface.
@@ -176,20 +176,231 @@ JID formats:
 | Telegram | `tg:CHAT_ID` |
 | WhatsApp | `PHONE@s.whatsapp.net` / `GROUP_ID@g.us` |
 
-### `src/config.ts` — Configuration
+---
 
-All non-secret configuration lives here, read from environment variables at startup.
+## Configuration Management
 
-| Constant | Default | Purpose |
-|---|---|---|
-| `ASSISTANT_NAME` | `Andy` | Trigger prefix (`@Andy`) |
-| `POLL_INTERVAL` | 2 000 ms | Message poll rate |
-| `SCHEDULER_POLL_INTERVAL` | 60 000 ms | Task check rate |
-| `CONTAINER_IMAGE` | `nanoclaw-agent:latest` | Docker image tag |
-| `CONTAINER_TIMEOUT` | 1 800 000 ms | Hard container kill deadline |
-| `IDLE_TIMEOUT` | 1 800 000 ms | Kill after this long with no output |
-| `MAX_CONCURRENT_CONTAINERS` | 5 | Global container concurrency cap |
-| `TRIGGER_PATTERN` | `/^@Andy\b/i` | Non-main groups must match this |
+NanoClaw separates configuration into three tiers: global constants, secrets, and per-group overrides.
+
+### Tier 1 — Global Constants (`src/config.ts`)
+
+All non-secret, process-wide configuration is defined here and read from environment variables at startup. Secrets are never read here.
+
+| Constant | Default | Source | Purpose |
+|---|---|---|---|
+| `ASSISTANT_NAME` | `Andy` | `.env` / env | Trigger prefix (`@Andy`) and bot identity |
+| `TRIGGER_PATTERN` | `/^@Andy\b/i` | derived | Regex for non-main group activation |
+| `POLL_INTERVAL` | 2 000 ms | hardcoded | Message poll rate |
+| `SCHEDULER_POLL_INTERVAL` | 60 000 ms | hardcoded | Task check rate |
+| `IPC_POLL_INTERVAL` | 1 000 ms | hardcoded | IPC watcher rate |
+| `CONTAINER_IMAGE` | `nanoclaw-agent:latest` | env | Docker image tag |
+| `CONTAINER_TIMEOUT` | 1 800 000 ms | env | Hard container kill deadline |
+| `IDLE_TIMEOUT` | 1 800 000 ms | hardcoded | Kill after this long with no output |
+| `MAX_CONCURRENT_CONTAINERS` | 5 | env | Global container concurrency cap |
+| `CREDENTIAL_PROXY_PORT` | 3001 | hardcoded | Credential proxy listen port |
+| `TIMEZONE` | system TZ | env `TZ` | Cron expressions and message timestamps |
+| `STORE_DIR` | `{cwd}/store` | derived | SQLite database location |
+| `GROUPS_DIR` | `{cwd}/groups` | derived | Per-group workspace folders |
+| `DATA_DIR` | `{cwd}/data` | derived | Sessions, IPC, logs |
+| `MOUNT_ALLOWLIST_PATH` | `~/.config/nanoclaw/mount-allowlist.json` | derived | External security allowlist |
+| `SENDER_ALLOWLIST_PATH` | `~/.config/nanoclaw/sender-allowlist.json` | derived | Allowed sender JIDs |
+
+### Tier 2 — Secrets (`.env` + `src/env.ts`)
+
+`src/env.ts` provides `readEnvFile(keys)` which reads `.env` from the project root and returns a plain object. It **never writes into `process.env`**, preventing secrets from leaking to child processes.
+
+Secrets are read explicitly by the components that need them:
+
+| Component | What it reads |
+|---|---|
+| `src/credential-proxy.ts` | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`; `OPENROUTER_API_KEY` |
+| `src/container-runner.ts` | Skill API keys (see allowlist below) |
+| `src/channels/*.ts` | Channel tokens (`TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN`, etc.) |
+| `src/gemini-fallback.ts` | `GOOGLE_GEMINI_API_KEY` |
+| `src/openai-fallback.ts` | `OPENAI_API_KEY` |
+
+**Skill env var allowlist** — `buildContainerArgs()` in `container-runner.ts` explicitly gates which variables enter the container via `-e` flags:
+
+```
+MOTION_API_KEY            MOTION_WORKSPACE_ID
+GOOGLE_CAL_CLIENT_ID      GOOGLE_CAL_CLIENT_SECRET
+GOOGLE_GMAIL_CLIENT_ID    GOOGLE_GMAIL_CLIENT_SECRET
+BRAVE_API_KEY             FIREBASE_SERVICE_ACCOUNT
+OPENAI_API_KEY            GOOGLE_GEMINI_API_KEY
+NUTRI_API_URL             OPENROUTER_API_KEY
+OPENROUTER_VISION_MODEL   OPENROUTER_TEXT_MODEL
+```
+
+To add a new skill's env var, append it to this allowlist in `buildContainerArgs()`.
+
+### Tier 3 — Per-Group Config (SQLite `registered_groups`)
+
+Each registered group can override container behaviour via the `container_config` column (stored as JSON):
+
+```typescript
+interface ContainerConfig {
+  timeout?: number;            // Override CONTAINER_TIMEOUT for this group (ms)
+  additionalMounts?: AdditionalMount[];
+}
+
+interface AdditionalMount {
+  hostPath: string;
+  containerPath: string;
+  allowReadWrite: boolean;
+  description?: string;
+}
+```
+
+Additional mounts must pass through `src/mount-security.ts` before being passed to Docker. The main group manages this config via IPC commands.
+
+### Container Settings Injection
+
+Before spawning each container, `container-runner.ts` writes two files into the session directory (`data/sessions/{group}/.claude/`):
+
+**`settings.json`** — enables experimental features:
+```json
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD": "1",
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "0"
+  }
+}
+```
+
+**Skills sync** — every file under `container/skills/` is copied into `data/sessions/{group}/.claude/skills/` so the Claude Code CLI inside the container picks them up automatically. Editing a skill file takes effect on the next container invocation with no rebuild needed.
+
+---
+
+## Container Build & Launch
+
+### Image Build (`container/Dockerfile`)
+
+Base image: `node:22-slim` (Debian slim + Node.js 22, non-root `node` user).
+
+System packages installed:
+
+| Category | Packages |
+|---|---|
+| Browser automation | `chromium`, libgbm1, libnss3, libatk-bridge2.0-0, libgtk-3-0, and associated X11/audio libs |
+| Fonts | `fonts-liberation`, `fonts-noto-cjk`, `fonts-noto-color-emoji` |
+| Dev tools | `curl`, `git`, `python3`, `python3-pip`, `ffmpeg`, `pandoc`, `wkhtmltopdf` |
+
+Global npm packages installed into the image:
+
+- `agent-browser` — Headless Chromium CLI tool (from Anthropic)
+- `@anthropic-ai/claude-code` — The Claude Code CLI (this is what runs the agent)
+
+Chromium environment variables set at build time so both `agent-browser` and Playwright find the system binary without a separate download:
+
+```
+AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+```
+
+The `agent-runner` source is copied in and compiled during the build (`npm install && npm run build`). Workspace directories are pre-created at build time:
+
+```
+/workspace/group    /workspace/global    /workspace/extra
+/workspace/ipc/messages  /workspace/ipc/tasks  /workspace/ipc/input
+```
+
+Rebuild the image with `./container/build.sh` (from a Linux/Git Bash shell). Takes ~2 min. Only needed when the Dockerfile or agent-runner TypeScript changes; skill file edits do not require a rebuild.
+
+### Container Entrypoint
+
+The entrypoint script compiles the agent-runner from source at startup (so the host can hot-patch it via the mounted `/app/src`), then pipes stdin JSON into the compiled binary:
+
+```bash
+#!/bin/bash
+set -e
+cd /app && npx tsc --outDir /tmp/dist 2>&1 >&2
+ln -s /app/node_modules /tmp/dist/node_modules
+chmod -R a-w /tmp/dist
+cat > /tmp/input.json
+node /tmp/dist/index.js < /tmp/input.json
+```
+
+### `docker run` Command Structure
+
+`buildContainerArgs()` assembles the command. The structure is:
+
+```
+docker run -i --rm --name nanoclaw-{safeName}-{timestamp}
+  -e TZ={TIMEZONE}
+  -e ANTHROPIC_BASE_URL=http://host.docker.internal:3001
+  -e ANTHROPIC_API_KEY=placeholder          # or CLAUDE_CODE_OAUTH_TOKEN=placeholder
+  [-e OPENROUTER_MODEL=... -e ANTHROPIC_MODEL=...]   # OpenRouter mode only
+  [-e MOTION_API_KEY=... -e BRAVE_API_KEY=... ...]   # skill vars from allowlist
+  [--add-host=host.docker.internal:host-gateway]     # Linux only
+  [--user {hostUid}:{hostGid} -e HOME=/home/node]    # if host uid ≠ 0 or 1000
+  -v {groups/folder}:/workspace/group
+  -v {groups/global}:/workspace/global:ro            # non-main; rw for main
+  [-v {cwd}:/workspace/project:ro]                   # main group only
+  [-v /dev/null:/workspace/project/.env:ro]          # hides .env from main
+  -v {data/sessions/folder/.claude}:/home/node/.claude
+  -v {data/sessions/folder/ipc}:/workspace/ipc
+  -v {data/sessions/folder/agent-runner-src}:/app/src
+  [-v {hostPath}:{containerPath}[:ro]]               # validated additionalMounts
+  nanoclaw-agent:latest
+```
+
+**Host gateway routing:**
+
+| Platform | Resolution |
+|---|---|
+| macOS / Docker Desktop | `127.0.0.1` — Docker Desktop routes `host.docker.internal` automatically |
+| Linux | Binds to `docker0` bridge IP; adds `--add-host=host.docker.internal:host-gateway` |
+
+**Input/output protocol:**
+
+Input is a JSON blob piped to stdin:
+```typescript
+interface ContainerInput {
+  prompt: string;
+  sessionId?: string;      // omitted on first run; supplied for session resumption
+  groupFolder: string;
+  chatJid: string;
+  isMain: boolean;
+  isScheduledTask?: boolean;
+  assistantName?: string;
+}
+```
+
+Output is zero or more JSON blobs wrapped in sentinel markers on stdout:
+```
+---NANOCLAW_OUTPUT_START---
+{"status": "success"|"error", "result": "...", "newSessionId": "...", "error": "..."}
+---NANOCLAW_OUTPUT_END---
+```
+
+**Timeout handling:**
+
+The effective timeout is `max(containerConfig.timeout, IDLE_TIMEOUT + 30s)`. When it fires:
+1. `docker stop {name}` with a 15 s grace period
+2. If that fails: `SIGKILL` via `container.kill('SIGKILL')`
+3. If the container had produced output before timing out: resolves as `success`; otherwise `error`
+
+**Logging:** On exit, stdout and stderr (each capped at 10 MB) are written to `groups/{folder}/logs/container-{timestamp}.log`. Full verbose logging is enabled when `LOG_LEVEL=debug`.
+
+---
+
+## Claude Code CLI Inside the Container
+
+The agent is not a custom LLM integration — it runs the **Claude Code CLI** (`@anthropic-ai/claude-code`, installed globally in the image) via the **Claude Agent SDK** (`@anthropic-ai/claude-agent-sdk`).
+
+The agent-runner calls `query()` from the SDK with `permissionMode: 'bypassPermissions'` — the container's filesystem isolation replaces the normal permission prompts. Inside the container the agent has full access to:
+
+- **File tools:** `Read`, `Write`, `Edit`, `Glob`, `Grep` (scoped to mounted paths)
+- **Shell:** `Bash` (runs inside the container; cannot reach the host)
+- **Web:** `WebSearch`, `WebFetch`
+- **Orchestration:** `Task`, `TeamCreate`, `SendMessage` (agent-teams support)
+- **MCP tools:** `mcp__nanoclaw__*` (send messages, schedule tasks)
+- **Skills:** Claude Code slash commands from `/home/node/.claude/skills/`
+
+Session IDs from Claude Code are persisted to SQLite after each run. Supplying the same session ID on the next invocation resumes the conversation with full context — the agent remembers tool calls, prior turns, and any files it modified.
+
+The Claude Code CLI is also what drives the **skill system**: each `container/skills/*/SKILL.md` is a Claude Code skill prompt. When the agent calls `/motion` or `/google-calendar`, Claude Code reads the skill's YAML frontmatter, spawns a subagent with the skill model, and executes the skill's instructions.
 
 ---
 
@@ -199,16 +410,11 @@ All non-secret configuration lives here, read from environment variables at star
 
 The executable that runs inside every container. It:
 
-1. Reads a `ContainerInput` JSON blob from stdin (prompt, sessionId, groupFolder, chatJid, isMain)
+1. Reads a `ContainerInput` JSON blob from stdin
 2. Constructs a `MessageStream` — a push-based async iterable used as the prompt — so the SDK never closes stdin mid-conversation
 3. Calls `query()` from the Claude Agent SDK in a loop
-4. Polls `data/ipc/input/` for follow-up messages piped in by the host while the agent is running
-5. Emits `ContainerOutput` JSON wrapped in sentinel markers on stdout:
-   ```
-   ---NANOCLAW_OUTPUT_START---
-   {"text": "...", "sessionId": "..."}
-   ---NANOCLAW_OUTPUT_END---
-   ```
+4. Polls `/workspace/ipc/input/` for follow-up messages piped in by the host while the agent is running
+5. Emits `ContainerOutput` JSON wrapped in sentinel markers on stdout
 6. Continues the loop until a close sentinel arrives or the container times out
 
 **SDK call configuration:**
@@ -227,8 +433,6 @@ query({
 })
 ```
 
-Session IDs are persisted to DB after each run; passing the same ID on the next invocation resumes the Claude Code session, preserving conversation history and tool call context.
-
 ### `container/agent-runner/src/ipc-mcp-stdio.ts` — MCP Server
 
 A stdio-based MCP server exposed to the agent as `mcp__nanoclaw__*` tools. It writes JSON files to the IPC directories; the host IPC watcher processes them asynchronously.
@@ -242,7 +446,7 @@ A stdio-based MCP server exposed to the agent as `mcp__nanoclaw__*` tools. It wr
 
 ### `container/skills/` — Agent Skills
 
-Skills are Markdown files (with YAML frontmatter) synced from `container/skills/` into `/home/node/.claude/skills/` on every container start. They become available as Claude Code slash commands inside the container.
+Skills are Markdown files (with YAML frontmatter) synced from `container/skills/` into `/home/node/.claude/skills/` on every container start. They become available as Claude Code slash commands inside the container. A skill may include Python scripts alongside its `SKILL.md`; scripts import from `sys.path` or use stdlib only (no pip unless added to the Dockerfile).
 
 ```yaml
 ---
@@ -253,18 +457,30 @@ model: claude-opus-4-7
 ---
 ```
 
-Built-in skills:
+All 18 installed skills:
 
-| Skill | Purpose | Needs |
+| Skill | Purpose | Env vars / deps |
 |---|---|---|
-| `adhd-coach` | Daily briefings, check-ins, end-of-day summary | Cron tasks |
-| `google-calendar` | Read/write Google Calendar | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` |
-| `groceries` | Simple list manager | — |
-| `brave-search` | Web search via Brave API | `BRAVE_API_KEY` |
-| `weather` | Current conditions via wttr.in | — |
-| `motion` | Task/project management via Motion API | `MOTION_API_KEY`, `MOTION_WORKSPACE_ID` |
-| `paper-trader` | Read paper trading portfolio state | `additionalMounts` on group |
-| `agent-browser` | Headless Chromium automation | — |
+| `adhd-coach` | ADHD coaching: Pomodoro sessions, morning briefings, check-ins, brain dumps. Schedules cron jobs for daily structure. | — |
+| `agent-browser` | Headless Chromium automation via semantic element refs (`@e1`). Navigate, click, fill, screenshot, PDF, cookie/localStorage management. | Chromium (bundled) |
+| `brave-search` | Web search via Brave Search LLM Context API. Supports freshness and type filters. | `BRAVE_API_KEY` |
+| `capabilities` | Read-only report of installed skills, available tools, MCP tools, and group mounts. Main-channel only. | — |
+| `gmail` | Read inbox, filter by label, mark read, archive, apply labels. OAuth2 device flow; token at `/workspace/group/.gmail-token.json`. | `GOOGLE_GMAIL_CLIENT_ID`, `GOOGLE_GMAIL_CLIENT_SECRET` |
+| `google-calendar` | List, create, update, delete calendar events. Supports non-primary calendars. OAuth2 device flow; token at `/workspace/group/.gcal-token.json`. | `GOOGLE_CAL_CLIENT_ID`, `GOOGLE_CAL_CLIENT_SECRET` |
+| `groceries` | Add/remove/list grocery items by category (meat, fruit-veg, pantry, chemist…). State in `/workspace/group/groceries.json`. | — |
+| `mobility-tracker` | Manage physiotherapy exercises and workout logs in Firestore. | `FIREBASE_SERVICE_ACCOUNT` |
+| `motion` | Motion task manager: list, create, update, delete tasks with auto-scheduling. Post-create `update --start-date` is required for Motion to schedule the task. | `MOTION_API_KEY`, `MOTION_WORKSPACE_ID` |
+| `nutri-skill` | Nutrition tracking: log meals (free-text or saved foods), OCR nutrition labels from photos, log water, view daily/weekly summaries. Connects to a FastAPI backend. | `NUTRI_API_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_VISION_MODEL`, `OPENROUTER_TEXT_MODEL` |
+| `openproject` | Multi-project task management via OpenProject MCP server. Date-range queries, task create/update/link, project summaries. | `OPENPROJECT_MCP_URL` (optional; defaults to `http://localhost:8085`) |
+| `paper-trader` | Read-only view of mean-reversion paper trading portfolio. Reads from a host-side JSON file via `additionalMounts`. | `additionalMounts` on group config |
+| `pdf-generator` | Convert Markdown or HTML to PDF (Pandoc), or render a URL to PDF (wkhtmltopdf). | Pandoc, wkhtmltopdf (bundled) |
+| `status` | Quick health check: workspace mounts, tool availability, container utility versions, task snapshot. Main-channel only. | — |
+| `subscription-reconciler` | Family subscription reconciliation from bank statements and Gmail receipts. Shows spending by family member, mysteries, and unmatched transactions. Talks to a host-side Docker service at `host.docker.internal:8400`. | Subscription Reconciler service running on host |
+| `tabletennis` | Track Pymble Table Tennis Club sessions, entry fees, lesson credits, and competition fees for George and Henry. SQLite at `/workspace/group/tabletennis.db`. | — |
+| `usage` | Show Claude token usage statistics (last 30 days) from the NanoClaw SQLite database. Main-channel only. | Requires `/workspace/project` mount (main group) |
+| `weather` | Current weather and forecasts via wttr.in (no key). Falls back to open-meteo JSON API for coordinates-based queries. | — |
+
+**Skills that are main-channel only** (`capabilities`, `status`, `usage`) check for the presence of `/workspace/project` — which is only mounted for the main group.
 
 ---
 
@@ -432,6 +648,18 @@ main() in src/index.ts
   └─ 8. Start message loop (2 s poll)
 ```
 
+NanoClaw runs as a **systemd service** on Linux. Use `start.sh` (a thin wrapper around `systemctl`) for lifecycle management:
+
+```bash
+./start.sh start    # build then start
+./start.sh stop
+./start.sh restart
+systemctl status nanoclaw
+journalctl -u nanoclaw -f
+```
+
+The service is configured with `Restart=always` and `RestartSec=5` — it restarts automatically on crash. Orphaned containers from a previous crash are killed at startup.
+
 ---
 
 ## Key File Reference
@@ -448,7 +676,7 @@ src/
 ├── credential-proxy.ts     Auth header injection proxy
 ├── mount-security.ts       Mount allowlist validation
 ├── config.ts               All non-secret configuration constants
-├── env.ts                  .env file reader
+├── env.ts                  .env reader (never writes process.env)
 ├── logger.ts               Pino logger setup
 ├── types.ts                Shared TypeScript interfaces
 └── channels/
@@ -458,37 +686,47 @@ src/
     └── telegram.ts         Telegram bot
 
 container/
-├── Dockerfile              Image: node:22-slim + Chromium + Python + ffmpeg
-├── build.sh                Build helper
+├── Dockerfile              node:22-slim + Chromium + Python + Claude Code CLI
+├── build.sh                Build helper (~2 min)
 └── agent-runner/
     ├── src/
     │   ├── index.ts        Agent runner; MessageStream; SDK query loop
     │   └── ipc-mcp-stdio.ts MCP server (send_message, schedule_task, …)
-    └── package.json
+    └── package.json        deps: claude-agent-sdk, mcp/sdk, cron-parser, zod
 
-container/skills/
-├── adhd-coach/             Daily briefing and check-in coach
-├── agent-browser/          Headless Chromium automation
-├── brave-search/           Brave Search API wrapper
-├── gmail/                  Gmail read/send
-├── google-calendar/        Google Calendar OAuth
-├── groceries/              Simple list manager
-├── motion/                 Motion API (tasks, projects)
-├── paper-trader/           Paper trading portfolio reader
-├── weather/                wttr.in + open-meteo
-└── …                       (additional custom skills)
+container/skills/           Synced into /home/node/.claude/skills/ at runtime
+├── adhd-coach/             ADHD coaching with Pomodoro and cron scheduling
+├── agent-browser/          Headless Chromium via semantic refs
+├── brave-search/           Brave Search API (needs BRAVE_API_KEY)
+├── capabilities/           Installed skills and tool inventory
+├── gmail/                  Gmail read/manage (needs GOOGLE_GMAIL_* creds)
+├── google-calendar/        Google Calendar (needs GOOGLE_CAL_* creds)
+├── groceries/              Grocery list manager
+├── mobility-tracker/       Firestore physio tracker (needs FIREBASE_SERVICE_ACCOUNT)
+├── motion/                 Motion task manager (needs MOTION_API_KEY)
+├── nutri-skill/            Nutrition tracking with photo OCR (needs NUTRI_API_URL)
+├── openproject/            OpenProject task management
+├── paper-trader/           Paper trading portfolio reader (needs additionalMounts)
+├── pdf-generator/          Markdown/HTML/URL → PDF via Pandoc or wkhtmltopdf
+├── status/                 Quick health check (main-channel only)
+├── subscription-reconciler/ Family subscription reconciliation
+├── tabletennis/            Table tennis session and fee tracker
+├── usage/                  Claude token usage stats (main-channel only)
+└── weather/                Weather via wttr.in / open-meteo
 
 groups/
 ├── CLAUDE.md               Global agent memory
 └── {name}/                 Per-group workspace (one folder per registered group)
 
 data/
-├── sessions/{group}/.claude/    Claude Code session data
+├── sessions/{group}/.claude/    Claude Code session data + settings + skills
 ├── ipc/{group}/messages/        Agent→host message IPC
 ├── ipc/{group}/tasks/           Agent→host task IPC
 └── ipc/{group}/input/           Host→agent follow-up IPC
 
-.claude/skills/             Claude Code skills (run by developer, not agents)
+.claude/skills/             Claude Code skills (run by developer in Claude Code, not by agents)
+store/
+└── messages.db             SQLite: messages, chats, groups, tasks, sessions, token_usage
 ```
 
 ---
