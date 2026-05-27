@@ -9,6 +9,7 @@ import path from 'path';
 import {
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
+  CONTAINER_NETWORK,
   CONTAINER_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
@@ -197,6 +198,7 @@ function buildContainerArgs(
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
+  args.push('--network', CONTAINER_NETWORK);
   args.push('-e', `TZ=${TIMEZONE}`);
 
   args.push(
@@ -248,7 +250,7 @@ function buildContainerArgs(
   }
 
   args.push(...hostGatewayArgs());
-  args.push(...hostDnsArgs());
+  args.push(...hostDnsArgs(CONTAINER_NETWORK));
 
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
