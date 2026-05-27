@@ -159,6 +159,39 @@ export class DiscordChannel implements Channel {
       .setDescription('Check if the bot is online')
       .toJSON();
 
+    const logMealCommand = new SlashCommandBuilder()
+      .setName('log-meal')
+      .setDescription('Log a meal to the nutrition tracker')
+      .addStringOption((option) =>
+        option
+          .setName('category')
+          .setDescription('Meal category')
+          .setRequired(true)
+          .addChoices(
+            { name: 'Breakfast', value: 'breakfast' },
+            { name: 'Lunch', value: 'lunch' },
+            { name: 'Dinner', value: 'dinner' },
+            { name: 'Snack', value: 'snack' },
+          ),
+      )
+      .addStringOption((option) =>
+        option
+          .setName('description')
+          .setDescription('What did you eat?')
+          .setRequired(true),
+      )
+      .toJSON();
+
+    const nutritionTodayCommand = new SlashCommandBuilder()
+      .setName('nutrition-today')
+      .setDescription('Get today\'s nutrition summary')
+      .toJSON();
+
+    const nutritionWeekCommand = new SlashCommandBuilder()
+      .setName('nutrition-week')
+      .setDescription('Get this week\'s nutrition summary')
+      .toJSON();
+
     // Register slash commands once bot is ready
     this.client.once(Events.ClientReady, async (readyClient) => {
       this.applicationId = readyClient.user.id;
@@ -167,13 +200,14 @@ export class DiscordChannel implements Channel {
         'Discord bot connected',
       );
       console.log(`\n  Discord bot: ${readyClient.user.tag}`);
-      console.log(`  Use /chatid to get a channel's registration ID\n`);
+      console.log(`  Use /chatid to get a channel's registration ID`);
+      console.log(`  Use /log-meal, /nutrition-today, /nutrition-week for nutrition tracking\n`);
 
       // Register commands globally
       try {
         const rest = new REST({ version: '10' }).setToken(this.botToken);
         await rest.put(Routes.applicationCommands(readyClient.user.id), {
-          body: [chatIdCommand, pingCommand],
+          body: [chatIdCommand, pingCommand, logMealCommand, nutritionTodayCommand, nutritionWeekCommand],
         });
         logger.info('Discord slash commands registered');
       } catch (err) {
@@ -190,6 +224,12 @@ export class DiscordChannel implements Channel {
         await this.handleChatIdCommand(interaction);
       } else if (commandName === 'ping') {
         await interaction.reply(`${ASSISTANT_NAME} is online.`);
+      } else if (commandName === 'log-meal') {
+        await this.handleLogMealCommand(interaction);
+      } else if (commandName === 'nutrition-today') {
+        await this.handleNutritionTodayCommand(interaction);
+      } else if (commandName === 'nutrition-week') {
+        await this.handleNutritionWeekCommand(interaction);
       }
     });
 
@@ -222,10 +262,13 @@ export class DiscordChannel implements Channel {
       await this.client.login(this.botToken);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('disallowed intents') || msg.includes('Used disallowed')) {
+      if (
+        msg.includes('disallowed intents') ||
+        msg.includes('Used disallowed')
+      ) {
         logger.error(
           'Discord: Message Content Intent is not enabled. ' +
-          'Go to Discord Developer Portal → your app → Bot → Privileged Gateway Intents → enable Message Content Intent.',
+            'Go to Discord Developer Portal → your app → Bot → Privileged Gateway Intents → enable Message Content Intent.',
         );
       } else {
         logger.error({ err }, 'Discord: failed to connect');
@@ -264,6 +307,121 @@ export class DiscordChannel implements Channel {
     await interaction.reply(
       `Chat ID: \`${jid}\`\nName: ${name}\nType: ${type}`,
     );
+  }
+
+  private async handleLogMealCommand(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    await interaction.deferReply();
+
+    const category = interaction.options.getString('category', true);
+    const description = interaction.options.getString('description', true);
+    const channel = interaction.channel;
+
+    if (!channel || !(
+      channel instanceof TextChannel ||
+      channel instanceof ThreadChannel ||
+      channel instanceof DMChannel
+    )) {
+      await interaction.editReply('Error: Could not determine channel');
+      return;
+    }
+
+    const jid = channelToJid(channel);
+    const timestamp = new Date().toISOString();
+    const senderName = interaction.user.displayName || interaction.user.username || 'Unknown';
+
+    try {
+      // Send nutrition skill request through NanoClaw
+      const nutriMessage = `Log meal: ${category} - ${description}`;
+      this.opts.onMessage(jid, {
+        id: interaction.id,
+        chat_jid: jid,
+        sender: interaction.user.id,
+        sender_name: senderName,
+        content: nutriMessage,
+        timestamp,
+      });
+
+      await interaction.editReply(`📝 Logging meal: **${category}** - ${description}`);
+    } catch (err) {
+      logger.error({ err }, 'Failed to handle log meal command');
+      await interaction.editReply('Error logging meal. Try asking in chat instead.');
+    }
+  }
+
+  private async handleNutritionTodayCommand(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    await interaction.deferReply();
+
+    const channel = interaction.channel;
+    if (!channel || !(
+      channel instanceof TextChannel ||
+      channel instanceof ThreadChannel ||
+      channel instanceof DMChannel
+    )) {
+      await interaction.editReply('Error: Could not determine channel');
+      return;
+    }
+
+    const jid = channelToJid(channel);
+    const timestamp = new Date().toISOString();
+    const senderName = interaction.user.displayName || interaction.user.username || 'Unknown';
+
+    try {
+      // Send nutrition summary request
+      this.opts.onMessage(jid, {
+        id: interaction.id,
+        chat_jid: jid,
+        sender: interaction.user.id,
+        sender_name: senderName,
+        content: 'Show my nutrition summary for today',
+        timestamp,
+      });
+
+      await interaction.editReply('📊 Fetching today\'s nutrition summary...');
+    } catch (err) {
+      logger.error({ err }, 'Failed to handle nutrition today command');
+      await interaction.editReply('Error fetching nutrition summary. Try asking in chat instead.');
+    }
+  }
+
+  private async handleNutritionWeekCommand(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    await interaction.deferReply();
+
+    const channel = interaction.channel;
+    if (!channel || !(
+      channel instanceof TextChannel ||
+      channel instanceof ThreadChannel ||
+      channel instanceof DMChannel
+    )) {
+      await interaction.editReply('Error: Could not determine channel');
+      return;
+    }
+
+    const jid = channelToJid(channel);
+    const timestamp = new Date().toISOString();
+    const senderName = interaction.user.displayName || interaction.user.username || 'Unknown';
+
+    try {
+      // Send nutrition summary request
+      this.opts.onMessage(jid, {
+        id: interaction.id,
+        chat_jid: jid,
+        sender: interaction.user.id,
+        sender_name: senderName,
+        content: 'Show my nutrition summary for this week',
+        timestamp,
+      });
+
+      await interaction.editReply('📊 Fetching this week\'s nutrition summary...');
+    } catch (err) {
+      logger.error({ err }, 'Failed to handle nutrition week command');
+      await interaction.editReply('Error fetching nutrition summary. Try asking in chat instead.');
+    }
   }
 
   private async handleMessage(
