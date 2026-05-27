@@ -1,0 +1,63 @@
+name: Claude Code Review
+
+on:
+  # Automatic review when a PR is opened or new commits are pushed
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+  # On-demand: comment "@claude <request>" on any PR
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  # ── Automatic diff review ──────────────────────────────────────────────────
+  auto-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          direct_prompt: |
+            Review the changes in this pull request. Focus on:
+            - Correctness bugs and logic errors
+            - Security vulnerabilities (injection, auth bypass, path traversal, etc.)
+            - Breaking changes to existing behaviour
+            - Obvious performance issues (e.g. unbounded loops, missing awaits)
+
+            Post inline review comments on the specific lines where you find issues.
+            Skip style/formatting feedback — that is already enforced by CI (Prettier).
+            Be concise and actionable. If the changes look fine, say so briefly.
+
+  # ── On-demand assistant (@claude mentions in PR comments) ─────────────────
+  claude-assist:
+    if: |
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
+       contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' &&
+       contains(github.event.comment.body, '@claude'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}

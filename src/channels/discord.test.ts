@@ -72,7 +72,7 @@ vi.mock('discord.js', () => {
     partials: any[];
     eventHandlers = new Map<string, Handler[]>();
     onceHandlers = new Map<string, Handler[]>();
-    isReady = false;
+    private _isReady = false;
 
     user = {
       id: '987654321098765432',
@@ -113,8 +113,12 @@ vi.mock('discord.js', () => {
       this.onceHandlers.set(event, existing);
     }
 
+    isReady() {
+      return this._isReady;
+    }
+
     async login(_token: string) {
-      this.isReady = true;
+      this._isReady = true;
       // Trigger ClientReady handlers
       const handlers = this.onceHandlers.get('ready') || [];
       for (const h of handlers) {
@@ -123,7 +127,7 @@ vi.mock('discord.js', () => {
     }
 
     destroy() {
-      this.isReady = false;
+      this._isReady = false;
     }
   }
 
