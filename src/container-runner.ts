@@ -239,6 +239,8 @@ function buildContainerArgs(
     'OPENROUTER_API_KEY',
     'OPENROUTER_VISION_MODEL',
     'OPENROUTER_TEXT_MODEL',
+    'OPENROUTER_REASONING_EFFORT',
+    'OPENROUTER_REASONING_MAX_TOKENS',
   ]);
   for (const [key, value] of Object.entries(skillEnv)) {
     args.push('-e', `${key}=${value}`);

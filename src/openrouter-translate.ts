@@ -2,7 +2,8 @@
  * Translates between Anthropic and OpenAI API formats for OpenRouter.
  * OpenRouter only supports the OpenAI /v1/chat/completions format;
  * the Claude Agent SDK only speaks Anthropic /v1/messages format.
- * This module handles both request and streaming-response translation.
+ * This module handles both request and streaming-response translation,
+ * including reasoning token support (reasoning param + reasoning_details).
  */
 
 // ─── Request: Anthropic → OpenAI ─────────────────────────────────────────────
@@ -10,6 +11,7 @@
 export function translateRequestBody(
   anthropicBody: any,
   targetModel: string,
+  reasoningConfig?: { effort?: string; max_tokens?: number },
 ): any {
   const messages: any[] = [];
 
@@ -56,6 +58,9 @@ export function translateRequestBody(
         messages.push({ role: 'user', content: text });
       }
     } else if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+      const thinkingBlocks = msg.content.filter(
+        (b: any) => b.type === 'thinking',
+      );
       const textBlocks = msg.content.filter((b: any) => b.type === 'text');
       const toolUseBlocks = msg.content.filter(
         (b: any) => b.type === 'tool_use',
@@ -65,6 +70,17 @@ export function translateRequestBody(
         role: 'assistant',
         content: textBlocks.map((b: any) => b.text).join('') || null,
       };
+
+      // Pass thinking blocks back as reasoning_details for multi-turn continuity
+      if (thinkingBlocks.length > 0) {
+        out.reasoning_details = thinkingBlocks.map((b: any) => {
+          if (b.signature) {
+            return { type: 'reasoning.encrypted', data: b.signature };
+          }
+          return { type: 'reasoning.text', text: b.thinking ?? '' };
+        });
+      }
+
       if (toolUseBlocks.length > 0) {
         out.tool_calls = toolUseBlocks.map((b: any) => ({
           id: b.id,
@@ -96,6 +112,9 @@ export function translateRequestBody(
   if (tools?.length) out.tools = tools;
   if (anthropicBody.temperature != null)
     out.temperature = anthropicBody.temperature;
+  if (reasoningConfig) out.reasoning = reasoningConfig;
+  // Include token usage in the stream so the proxy can count tokens accurately
+  if (out.stream) out.stream_options = { include_usage: true };
 
   return out;
 }
@@ -107,6 +126,25 @@ export function translateResponseBody(openaiBody: any): any {
   const choice = openaiBody.choices?.[0];
   const msg = choice?.message ?? {};
   const content: any[] = [];
+
+  // Reasoning blocks come before text blocks in the Anthropic content array
+  if (msg.reasoning_details?.length) {
+    for (const rd of msg.reasoning_details) {
+      if (rd.type === 'reasoning.text' || rd.type === 'reasoning.summary') {
+        content.push({
+          type: 'thinking',
+          thinking: rd.text ?? '',
+          signature: '',
+        });
+      } else if (rd.type === 'reasoning.encrypted') {
+        content.push({
+          type: 'thinking',
+          thinking: '',
+          signature: rd.data ?? '',
+        });
+      }
+    }
+  }
 
   if (msg.content) content.push({ type: 'text', text: msg.content });
 
@@ -156,9 +194,11 @@ export class StreamTranslator {
   private started = false;
   private inputToks = 0;
   private outToks = 0;
-  // Track open content blocks: index → { type, closed }
+  // content block index → { type, closed }
   private blocks = new Map<number, { type: string; closed: boolean }>();
-  private nextIndex = 0; // next block index to open
+  private nextIndex = 0;
+  // OpenAI tool_calls[].index → content block index
+  private toolCallIndexMap = new Map<number, number>();
 
   /** Feed one raw SSE line; returns translated SSE lines to emit. */
   processLine(line: string): string[] {
@@ -198,15 +238,62 @@ export class StreamTranslator {
     for (const choice of chunk.choices ?? []) {
       const delta = choice.delta ?? {};
 
-      // Text delta
+      // Reasoning details delta → Anthropic thinking block
+      if (delta.reasoning_details?.length) {
+        for (const rd of delta.reasoning_details) {
+          const text =
+            rd.type === 'reasoning.text' || rd.type === 'reasoning.summary'
+              ? (rd.text ?? '')
+              : null;
+          if (text === null) continue;
+
+          const thinkingEntry = this.findOpenBlock('thinking');
+          if (!thinkingEntry) {
+            const idx = this.nextIndex++;
+            this.blocks.set(idx, { type: 'thinking', closed: false });
+            events.push(
+              sse({
+                type: 'content_block_start',
+                index: idx,
+                content_block: { type: 'thinking', thinking: '' },
+              }),
+            );
+            events.push(
+              sse({
+                type: 'content_block_delta',
+                index: idx,
+                delta: { type: 'thinking_delta', thinking: text },
+              }),
+            );
+          } else {
+            events.push(
+              sse({
+                type: 'content_block_delta',
+                index: thinkingEntry[0],
+                delta: { type: 'thinking_delta', thinking: text },
+              }),
+            );
+          }
+        }
+      }
+
+      // Text delta — close any open thinking block first, then open/continue text block
       if (typeof delta.content === 'string' && delta.content.length > 0) {
-        if (!this.blocks.has(0)) {
-          this.blocks.set(0, { type: 'text', closed: false });
-          this.nextIndex = Math.max(this.nextIndex, 1);
+        const thinking = this.findOpenBlock('thinking');
+        if (thinking) {
+          thinking[1].closed = true;
+          events.push(sse({ type: 'content_block_stop', index: thinking[0] }));
+        }
+
+        let textEntry = this.findOpenBlock('text');
+        if (!textEntry) {
+          const idx = this.nextIndex++;
+          this.blocks.set(idx, { type: 'text', closed: false });
+          textEntry = [idx, this.blocks.get(idx)!];
           events.push(
             sse({
               type: 'content_block_start',
-              index: 0,
+              index: idx,
               content_block: { type: 'text', text: '' },
             }),
           );
@@ -214,7 +301,7 @@ export class StreamTranslator {
         events.push(
           sse({
             type: 'content_block_delta',
-            index: 0,
+            index: textEntry[0],
             delta: { type: 'text_delta', text: delta.content },
           }),
         );
@@ -222,19 +309,26 @@ export class StreamTranslator {
 
       // Tool call deltas
       for (const tc of delta.tool_calls ?? []) {
-        // OpenAI tool_calls[].index = tool call slot (0-based, not content block index)
-        const blockIdx = 1 + tc.index; // reserve index 0 for text
-
         if (tc.id) {
-          // First chunk for this tool call — open the block
-          // Close text block first if open and not yet closed
-          const textBlock = this.blocks.get(0);
-          if (textBlock && !textBlock.closed) {
-            textBlock.closed = true;
-            events.push(sse({ type: 'content_block_stop', index: 0 }));
+          // First chunk for this tool call slot — close earlier blocks and open a new one
+          const thinking = this.findOpenBlock('thinking');
+          if (thinking) {
+            thinking[1].closed = true;
+            events.push(
+              sse({ type: 'content_block_stop', index: thinking[0] }),
+            );
           }
+          const textBlock = this.findOpenBlock('text');
+          if (textBlock) {
+            textBlock[1].closed = true;
+            events.push(
+              sse({ type: 'content_block_stop', index: textBlock[0] }),
+            );
+          }
+
+          const blockIdx = this.nextIndex++;
+          this.toolCallIndexMap.set(tc.index, blockIdx);
           this.blocks.set(blockIdx, { type: 'tool_use', closed: false });
-          this.nextIndex = Math.max(this.nextIndex, blockIdx + 1);
           events.push(
             sse({
               type: 'content_block_start',
@@ -250,16 +344,19 @@ export class StreamTranslator {
         }
 
         if (tc.function?.arguments) {
-          events.push(
-            sse({
-              type: 'content_block_delta',
-              index: blockIdx,
-              delta: {
-                type: 'input_json_delta',
-                partial_json: tc.function.arguments,
-              },
-            }),
-          );
+          const blockIdx = this.toolCallIndexMap.get(tc.index);
+          if (blockIdx !== undefined) {
+            events.push(
+              sse({
+                type: 'content_block_delta',
+                index: blockIdx,
+                delta: {
+                  type: 'input_json_delta',
+                  partial_json: tc.function.arguments,
+                },
+              }),
+            );
+          }
         }
       }
 
@@ -287,12 +384,21 @@ export class StreamTranslator {
       }
     }
 
-    // Usage-only chunk (some providers send this at the end)
+    // Usage-only chunk (stream_options: { include_usage: true })
     if (chunk.usage?.completion_tokens) {
       this.outToks = chunk.usage.completion_tokens;
     }
 
     return events;
+  }
+
+  private findOpenBlock(
+    type: string,
+  ): [number, { type: string; closed: boolean }] | null {
+    for (const [idx, block] of this.blocks) {
+      if (block.type === type && !block.closed) return [idx, block];
+    }
+    return null;
   }
 
   private flush(): string[] {
