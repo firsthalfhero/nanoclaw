@@ -18,6 +18,8 @@ NanoClaw is a single Node.js process (the **host**) that:
 
 The host process owns all secrets and privileged operations. Containers run untrusted user input in isolation and communicate back only through a narrow IPC surface.
 
+This fork has been **decoupled from the Anthropic API**. The credential proxy can transparently redirect all agent API calls to [OpenRouter](https://openrouter.ai), making the container runtime model-agnostic. Setting two environment variables (`OPENROUTER_API_KEY` + `OPENROUTER_MODEL`) switches the entire agent from Claude to any model available on OpenRouter with no code changes.
+
 ```
 ┌───────────────────────────────────────────────────────────────────┐
 │                        HOST  (Node.js)                            │
@@ -73,7 +75,7 @@ The entry point and central coordinator. Responsibilities:
 - Connects all registered channels
 - Starts the scheduler, IPC watcher, and message loop
 - Implements `processGroupMessages()` — the core pipeline from raw messages to container invocation
-- Falls back to OpenAI/Gemini if the Claude API call fails
+- Triggers the host-side fallback chain (trusted source → OpenAI → Gemini) on agent failure
 
 Key state held in memory:
 
@@ -136,7 +138,19 @@ SQLite via `better-sqlite3`. All tables are created on first run; missing column
 
 ### `src/credential-proxy.ts` — Credential Proxy
 
-An HTTP proxy that runs on the host (default port 3001). Containers are configured to send all Anthropic API calls through it. The proxy intercepts each request and injects the real `Authorization` header before forwarding, so API keys never appear inside a container's environment or filesystem.
+An HTTP proxy that runs on the host (default port 3001). Containers send all API calls through it. The proxy is the single point where provider selection happens: in OpenRouter mode it rewrites the destination URL and model field and injects OpenRouter credentials; in direct mode it injects Anthropic credentials. Either way, real keys never appear inside a container. See [Provider Architecture](#provider-architecture) for the full routing logic.
+
+### `src/openai-fallback.ts`, `src/gemini-fallback.ts`, `src/trusted-source-fallback.ts` — Fallbacks
+
+Host-side LLM calls used when the container agent fails. See [Provider Architecture — Tier 2](#tier-2----host-side-fallback-chain) for the full chain and trigger conditions.
+
+### `src/direct-provider.ts` — Direct Provider Test
+
+Parses `@Andy please tell me {x} using {claude|openai|gemini}` commands and routes them to the appropriate provider for side-by-side testing without going through the container.
+
+### `src/openrouter-translate.ts` — Format Translator (Historical)
+
+No longer called. Written for the initial OpenRouter integration which routed through OpenRouter's OpenAI-format endpoint and required Anthropic↔OpenAI wire format translation. Superseded when OpenRouter added a native Anthropic-compatible endpoint (`/api/v1/messages`).
 
 ### `src/mount-security.ts` — Mount Validation
 
@@ -213,8 +227,8 @@ Secrets are read explicitly by the components that need them:
 
 | Component | What it reads |
 |---|---|
-| `src/credential-proxy.ts` | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`; `OPENROUTER_API_KEY` |
-| `src/container-runner.ts` | Skill API keys (see allowlist below) |
+| `src/credential-proxy.ts` | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`; `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OPENROUTER_REFERER`, `OPENROUTER_TITLE` |
+| `src/container-runner.ts` | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (for mode detection); skill API keys (see allowlist below) |
 | `src/channels/*.ts` | Channel tokens (`TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN`, etc.) |
 | `src/gemini-fallback.ts` | `GOOGLE_GEMINI_API_KEY` |
 | `src/openai-fallback.ts` | `OPENAI_API_KEY` |
@@ -269,6 +283,148 @@ Before spawning each container, `container-runner.ts` writes two files into the 
 ```
 
 **Skills sync** — every file under `container/skills/` is copied into `data/sessions/{group}/.claude/skills/` so the Claude Code CLI inside the container picks them up automatically. Editing a skill file takes effect on the next container invocation with no rebuild needed.
+
+---
+
+## Provider Architecture
+
+### Overview
+
+The system supports three tiers of LLM access, each with different scope and trigger conditions.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Tier 1 — Container agent (full tool use, skills, memory)        │
+│   OpenRouter mode:  Anthropic-compat proxy → openrouter.ai      │
+│   Direct mode:      Credential proxy       → api.anthropic.com  │
+├─────────────────────────────────────────────────────────────────┤
+│ Tier 2 — Host-side fallback (triggered on agent failure)        │
+│   1. Trusted source scraper  (whitehouse.gov, factual only)     │
+│   2. OpenAI GPT-4o mini      (general)                          │
+│   3. Google Gemini 2.5 Flash (grounded web search)              │
+├─────────────────────────────────────────────────────────────────┤
+│ Tier 3 — Direct provider test  (@Andy ... using claude|openai…) │
+│   Bypasses container; calls provider directly for testing       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Tier 1 — Container Agent via OpenRouter
+
+The credential proxy (`src/credential-proxy.ts`) is the single switching point. At startup it reads `.env` and detects the active provider:
+
+```
+OPENROUTER_API_KEY set AND OPENROUTER_MODEL set  →  OpenRouter mode
+Otherwise                                         →  Direct Anthropic mode
+```
+
+**OpenRouter mode** — proxy forwards to OpenRouter's native Anthropic-compatible endpoint:
+
+```
+Container (Claude Code CLI)
+  ANTHROPIC_BASE_URL → http://host.docker.internal:3001
+       ↓
+Credential Proxy (port 3001)
+  • Replaces model field in JSON body with OPENROUTER_MODEL
+  • Deletes x-api-key header; injects Authorization: Bearer {OPENROUTER_API_KEY}
+  • Adds HTTP-Referer and X-Title headers if configured
+  • Strips ?beta=true query param (OpenRouter rejects it)
+       ↓
+https://openrouter.ai/api/v1/messages   ← Anthropic-format endpoint
+       ↓ (returns Anthropic-format response)
+Credential Proxy
+  • Records token usage in SQLite
+  • Pipes response through unchanged
+       ↓
+Container (receives native Anthropic format — no translation needed)
+```
+
+**Direct Anthropic mode** — proxy injects credentials and forwards to Anthropic:
+
+```
+Container → Credential Proxy → https://api.anthropic.com/v1/messages
+```
+
+The container always sees `ANTHROPIC_BASE_URL=http://host.docker.internal:3001` regardless of mode. Provider switching is invisible to the agent runtime.
+
+**Key env vars:**
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `OPENROUTER_API_KEY` | OpenRouter mode | API key for openrouter.ai |
+| `OPENROUTER_MODEL` | OpenRouter mode | Model ID (e.g. `google/gemini-2.0-flash`, `anthropic/claude-opus-4-5`) |
+| `OPENROUTER_REFERER` | Optional | `HTTP-Referer` header sent to OpenRouter |
+| `OPENROUTER_TITLE` | Optional | `X-Title` header sent to OpenRouter |
+| `ANTHROPIC_API_KEY` | Direct mode | Real Anthropic API key (not used by containers directly) |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Direct mode | OAuth token for Anthropic (alternative to API key) |
+
+#### Session Resumption in OpenRouter Mode
+
+The Claude Agent SDK's session resumption protocol is specific to Anthropic — OpenRouter does not support it. The agent-runner detects OpenRouter mode via the `OPENROUTER_MODEL` environment variable and disables session resumption:
+
+```typescript
+// container/agent-runner/src/index.ts
+function isOpenRouterMode(): boolean {
+  return !!process.env.OPENROUTER_MODEL;
+}
+
+// in query() call:
+resume: openRouterMode ? undefined : sessionId,
+```
+
+Sessions are still created and stored in SQLite so the system is ready if session support is added, but the session ID is never passed to the SDK when in OpenRouter mode. Each container invocation starts a fresh conversation context (though group memory via `CLAUDE.md` files is still loaded).
+
+#### Historical: Format Translation (`src/openrouter-translate.ts`)
+
+The initial OpenRouter integration (commit `fc5cbfe`) routed through OpenRouter's OpenAI-format endpoint (`/v1/chat/completions`) and used `openrouter-translate.ts` to convert between Anthropic and OpenAI wire formats — translating tool use blocks, tool results, streaming SSE events, and stop reasons. This was replaced (commit `cfd061f`) when OpenRouter added a native Anthropic-compatible endpoint (`/api/v1/messages`), making format translation unnecessary. The file remains in the codebase but is no longer called.
+
+### Tier 2 — Host-Side Fallback Chain
+
+The fallback chain runs on the host (no container) when the agent fails. Three scenarios trigger it:
+
+1. **Usage limit** — the container output contains Claude's usage cap message
+2. **Auth error** — the API returns a 40x/50x authentication or server error
+3. **Container crash** — the container exits before producing any output
+
+The chain is tried in order; the first success is returned:
+
+```
+src/index.ts → tryFallback(prompt)
+  │
+  ├─ 1. fallbackToTrustedSource(prompt)      src/trusted-source-fallback.ts
+  │      Scope: "who is the [current] president" queries only
+  │      Method: scrapes whitehouse.gov/administration/, extracts name from URL slug
+  │      No API key needed
+  │
+  ├─ 2. fallbackToChatGPT(prompt)            src/openai-fallback.ts
+  │      Model: gpt-4o-mini
+  │      Auth: OPENAI_API_KEY
+  │      Endpoint: https://api.openai.com/v1/chat/completions
+  │
+  └─ 3. fallbackToGeminiApi(prompt)          src/gemini-fallback.ts
+         Model: gemini-2.5-flash
+         Auth: GOOGLE_GEMINI_API_KEY (x-goog-api-key header)
+         Endpoint: https://generativelanguage.googleapis.com/v1beta/models/...
+         Google Search grounding enabled; sources appended to response
+         System persona: "Pip" (signals to user that it's a fallback)
+```
+
+All three fallbacks are host-side direct HTTP calls. They bypass the container, credential proxy, and agent tools. They exist purely to ensure a response reaches the user even when the primary agent path is down.
+
+### Tier 3 — Direct Provider Test
+
+A command syntax lets you invoke a specific provider directly without going through the container:
+
+```
+@Andy please tell me {prompt} using {claude|openai|gemini}
+```
+
+Parsed by `src/direct-provider.ts`, routed in `src/index.ts`:
+
+- `claude` → runs the full container agent pipeline
+- `openai` → calls `fallbackToChatGPT()` directly
+- `gemini` → calls `fallbackToGeminiApi()` directly
+
+This is useful for comparing model outputs or testing fallback availability without triggering a real failure.
 
 ---
 
@@ -673,8 +829,13 @@ src/
 ├── db.ts                   SQLite wrapper; all table definitions
 ├── group-queue.ts          Per-group concurrency queue
 ├── router.ts               formatMessages(); routeOutbound()
-├── credential-proxy.ts     Auth header injection proxy
+├── credential-proxy.ts     Auth injection proxy; OpenRouter vs Anthropic switching
 ├── mount-security.ts       Mount allowlist validation
+├── openai-fallback.ts      GPT-4o mini host-side fallback
+├── gemini-fallback.ts      Gemini 2.5 Flash host-side fallback (Google Search grounding)
+├── trusted-source-fallback.ts  Whitehouse.gov scraper fallback (US president queries)
+├── direct-provider.ts      "@Andy ... using {claude|openai|gemini}" command parser
+├── openrouter-translate.ts Anthropic↔OpenAI format translator (historical, unused)
 ├── config.ts               All non-secret configuration constants
 ├── env.ts                  .env reader (never writes process.env)
 ├── logger.ts               Pino logger setup
