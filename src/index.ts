@@ -43,6 +43,7 @@ import {
   PROXY_BIND_HOST,
 } from './container-runtime.js';
 import {
+  deleteSession,
   getAllChats,
   getAllRegisteredGroups,
   getAllSessions,
@@ -697,6 +698,73 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   return true;
 }
 
+function formatTasksContext(
+  tasks: ReturnType<typeof getAllTasks>,
+  groupFolder: string,
+  isMain: boolean,
+): string {
+  const visibleTasks = isMain
+    ? tasks
+    : tasks.filter((t) => t.group_folder === groupFolder);
+
+  const lines: string[] = ['## Scheduled Tasks Status'];
+
+  if (visibleTasks.length === 0) {
+    lines.push('You have no scheduled tasks at the moment.');
+    lines.push('');
+    return lines.join('\n');
+  }
+
+  const now = new Date();
+  const overdue: typeof visibleTasks = [];
+  const upcoming: typeof visibleTasks = [];
+  const paused: typeof visibleTasks = [];
+
+  for (const task of visibleTasks) {
+    if (task.status === 'paused' || task.status === 'completed') {
+      paused.push(task);
+    } else if (task.next_run) {
+      if (new Date(task.next_run) <= now) overdue.push(task);
+      else upcoming.push(task);
+    }
+  }
+
+  upcoming.sort((a, b) => (a.next_run || '').localeCompare(b.next_run || ''));
+  overdue.sort((a, b) => (a.next_run || '').localeCompare(b.next_run || ''));
+
+  lines.push(`You have ${visibleTasks.length} scheduled task(s):`);
+  lines.push('');
+
+  if (overdue.length > 0) {
+    lines.push(`${overdue.length} OVERDUE (should have run):`);
+    for (const task of overdue) {
+      const ts = task.next_run ? new Date(task.next_run).toLocaleString() : 'Unknown';
+      lines.push(`  - ${task.id} (${task.schedule_type}): due ${ts}`);
+      if (task.last_result) lines.push(`    Last: ${task.last_result.slice(0, 80)}`);
+    }
+    lines.push('');
+  }
+
+  if (upcoming.length > 0) {
+    lines.push(`${upcoming.length} Upcoming:`);
+    for (const task of upcoming.slice(0, 5)) {
+      const ts = task.next_run ? new Date(task.next_run).toLocaleString() : 'Unknown';
+      lines.push(`  - ${task.id} (${task.schedule_type}): next ${ts}`);
+    }
+    if (upcoming.length > 5) lines.push(`  ... and ${upcoming.length - 5} more`);
+    lines.push('');
+  }
+
+  if (paused.length > 0) {
+    lines.push(`${paused.length} Paused/Completed:`);
+    for (const task of paused.slice(0, 3)) lines.push(`  - ${task.id} (${task.status})`);
+    if (paused.length > 3) lines.push(`  ... and ${paused.length - 3} more`);
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
 async function runAgent(
   group: RegisteredGroup,
   prompt: string,
@@ -731,6 +799,10 @@ async function runAgent(
     new Set(Object.keys(registeredGroups)),
   );
 
+  // Prepend scheduled task status so the agent always has it in context
+  const taskContext = formatTasksContext(tasks, group.folder, isMain);
+  const promptWithContext = taskContext ? `${taskContext}\n\n${prompt}` : prompt;
+
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
@@ -746,7 +818,7 @@ async function runAgent(
     const output = await runContainerAgent(
       group,
       {
-        prompt,
+        prompt: promptWithContext,
         sessionId,
         groupFolder: group.folder,
         chatJid,
@@ -768,6 +840,20 @@ async function runAgent(
         { group: group.name, error: output.error },
         'Container agent error',
       );
+
+      // When the SDK can't find the session transcript (common after a crash,
+      // a container restart, or a model failure that prevented the transcript
+      // from being written), clear the stored session so the next run starts
+      // a fresh session instead of repeatedly hitting the same "not found" error.
+      if (output.error?.includes('No conversation found with session ID')) {
+        logger.warn(
+          { group: group.name, sessionId: sessions[group.folder] },
+          'Session transcript not found — clearing session for fresh start',
+        );
+        delete sessions[group.folder];
+        deleteSession(group.folder);
+      }
+
       return 'error';
     }
 

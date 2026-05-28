@@ -359,10 +359,11 @@ function waitForIpcMessage(): Promise<string | null> {
  * allowing agent teams subagents to run to completion.
  * Also pipes IPC messages into the stream during the query.
  *
- * NOTE: When using OpenRouter, session resumption is disabled because
- * OpenRouter does not support the Claude session resume protocol. Passing
- * a session ID to OpenRouter causes error_during_execution with zero tokens
- * and an empty errors array — a silent failure that is very hard to diagnose.
+ * Session resumption works via local transcript files that the SDK writes to
+ * /home/node/.claude/projects/{cwd-hash}/*.jsonl. When using OpenRouter via
+ * the Anthropic→OpenAI proxy, the SDK still manages transcripts locally and
+ * re-sends the full conversation history on resume — no server-side state
+ * is required. Resumption is enabled for both Claude and OpenRouter modes.
  */
 async function runQuery(
   prompt: string | ContentBlock[],
@@ -371,11 +372,13 @@ async function runQuery(
   containerInput: ContainerInput,
   sdkEnv: Record<string, string | undefined>,
   resumeAt?: string,
-): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean }> {
+): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean; sessionNotFound?: boolean }> {
   const openRouterMode = isOpenRouterMode();
 
-  if (openRouterMode && sessionId) {
-    log(`OpenRouter mode detected — disabling session resume (session ${sessionId} will not be resumed)`);
+  if (sessionId) {
+    log(`Attempting to resume session ${sessionId}${openRouterMode ? ' (OpenRouter mode)' : ''}`);
+  } else {
+    log(`Starting fresh session${openRouterMode ? ' (OpenRouter mode)' : ''}`);
   }
 
   const stream = new MessageStream();
@@ -406,6 +409,7 @@ async function runQuery(
   let lastAssistantText = '';
   let messageCount = 0;
   let resultCount = 0;
+  let sessionNotFound = false;
 
   const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
   let globalClaudeMd: string | undefined;
@@ -432,9 +436,12 @@ async function runQuery(
     options: {
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
-      // OpenRouter does not support session resumption — omit resume entirely
-      resume: openRouterMode ? undefined : sessionId,
-      resumeSessionAt: openRouterMode ? undefined : resumeAt,
+      // Session resumption works for both Claude and OpenRouter.
+      // The SDK reads the local transcript file and replays the conversation
+      // history as messages — the model only sees the messages array, so
+      // any model that supports multi-turn (including OpenRouter models) works.
+      resume: sessionId,
+      resumeSessionAt: resumeAt,
       systemPrompt: globalClaudeMd
         ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
         : undefined,
@@ -534,21 +541,28 @@ async function runQuery(
       const isError = resultMsg.subtype === 'error_during_execution' || !!errorInfo;
       const status = isError ? 'error' : 'success';
       const subtype = message.subtype || 'unknown';
-      log(`Result #${resultCount}: subtype=${subtype}${textResult ? ` text=${textResult}` : ''}${errorInfo ? ` error=${errorInfo}` : ''}`);
-      
-      // Forward error details in the output so the orchestrator can log them
-      writeOutput({
-        status,
-        result: textResult || null,
-        newSessionId,
-        error: errorInfo || undefined,
-      });
+      log(`Result #${resultCount}: subtype=${subtype}${textResult ? ` text=${textResult.slice(0, 120)}` : ''}${errorInfo ? ` error=${errorInfo}` : ''}`);
+
+      // Track session-not-found errors so the caller can retry without resume
+      if (errorInfo?.includes('No conversation found with session ID')) {
+        sessionNotFound = true;
+        log(`Session transcript not found — will retry without resume`);
+        // Don't emit an output for this — caller will retry transparently
+      } else {
+        // Forward result to orchestrator
+        writeOutput({
+          status,
+          result: textResult || null,
+          newSessionId,
+          error: errorInfo || undefined,
+        });
+      }
     }
   }
 
   ipcPolling = false;
-  log(`Query done. Messages: ${messageCount}, results: ${resultCount}, lastAssistantUuid: ${lastAssistantUuid || 'none'}, closedDuringQuery: ${closedDuringQuery}`);
-  return { newSessionId, lastAssistantUuid, closedDuringQuery };
+  log(`Query done. Messages: ${messageCount}, results: ${resultCount}, lastAssistantUuid: ${lastAssistantUuid || 'none'}, closedDuringQuery: ${closedDuringQuery}, sessionNotFound: ${sessionNotFound}`);
+  return { newSessionId, lastAssistantUuid, closedDuringQuery, sessionNotFound };
 }
 
 /**
@@ -648,7 +662,18 @@ async function main(): Promise<void> {
       log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`);
       log(`Prompt content length: ${typeof currentContent === 'string' ? currentContent.length : 'multimodal ' + JSON.stringify(currentContent).length} chars`);
 
-      const queryResult = await runQuery(currentContent, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
+      let queryResult = await runQuery(currentContent, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
+
+      // If the transcript was not found (session was lost between container runs),
+      // retry immediately without resume. This happens when the SDK session file
+      // was wiped (container image rebuild, data dir cleared, etc.).
+      if (queryResult.sessionNotFound) {
+        log(`Retrying without session resume (session ${sessionId} transcript missing)`);
+        sessionId = undefined;
+        resumeAt = undefined;
+        queryResult = await runQuery(currentContent, undefined, mcpServerPath, containerInput, sdkEnv, undefined);
+      }
+
       if (queryResult.newSessionId) {
         sessionId = queryResult.newSessionId;
         log(`Updated session ID: ${sessionId}`);

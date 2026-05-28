@@ -9,6 +9,7 @@ import path from 'path';
 import {
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
+  CONTAINER_NETWORK,
   CONTAINER_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
@@ -197,6 +198,7 @@ function buildContainerArgs(
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
+  args.push('--network', CONTAINER_NETWORK);
   args.push('-e', `TZ=${TIMEZONE}`);
 
   args.push(
@@ -211,12 +213,11 @@ function buildContainerArgs(
 
   if (useOpenRouter) {
     args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
-    // Pass model name into the container so agent-runner knows to disable session resumption.
-    // The API key stays on the host (proxy handles auth) — only the model string is needed.
+    // Tell the agent-runner we are in OpenRouter mode so it can adapt behaviour.
+    // Do NOT set ANTHROPIC_MODEL to the OpenRouter model string — the CLI validates
+    // model names against Anthropic's list and rejects non-Anthropic IDs before
+    // making any API call. The proxy overrides the model in the request body.
     args.push('-e', `OPENROUTER_MODEL=${openrouterEnv['OPENROUTER_MODEL']}`);
-    // Override the SDK's default model so it uses the OpenRouter model instead of
-    // defaulting to claude-sonnet-4-6 (which does not exist on OpenRouter).
-    args.push('-e', `ANTHROPIC_MODEL=${openrouterEnv['OPENROUTER_MODEL']}`);
   } else {
     const authMode = detectAuthMode();
     if (authMode === 'api-key') {
@@ -250,7 +251,7 @@ function buildContainerArgs(
   }
 
   args.push(...hostGatewayArgs());
-  args.push(...hostDnsArgs());
+  args.push(...hostDnsArgs(CONTAINER_NETWORK));
 
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();

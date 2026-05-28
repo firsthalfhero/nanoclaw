@@ -18,6 +18,10 @@
 import { createServer, Server } from 'http';
 import { request as httpsRequest } from 'https';
 import { request as httpRequest, RequestOptions } from 'http';
+import { gunzip } from 'zlib';
+import { promisify } from 'util';
+
+const gunzipAsync = promisify(gunzip);
 
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
@@ -124,17 +128,13 @@ export function startCredentialProxy(
     : undefined;
   const useOpenRouter = !!(openrouterKey && openrouterModel);
 
-  const reasoningConfig =
-    openrouterReasoningEffort || openrouterReasoningMaxTokens
-      ? {
-          ...(openrouterReasoningEffort
-            ? { effort: openrouterReasoningEffort }
-            : {}),
-          ...(openrouterReasoningMaxTokens
-            ? { max_tokens: openrouterReasoningMaxTokens }
-            : {}),
-        }
-      : undefined;
+  // OpenRouter accepts EITHER reasoning.effort OR reasoning.max_tokens, not both.
+  // Prefer effort when set; fall back to max_tokens.
+  const reasoningConfig = openrouterReasoningEffort
+    ? { effort: openrouterReasoningEffort }
+    : openrouterReasoningMaxTokens
+    ? { max_tokens: openrouterReasoningMaxTokens }
+    : undefined;
 
   const authMode: AuthMode = secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
   const oauthToken =
@@ -187,6 +187,10 @@ export function startCredentialProxy(
         delete headers['connection'];
         delete headers['keep-alive'];
         delete headers['transfer-encoding'];
+        // For OpenRouter: remove Accept-Encoding to get plain JSON (not gzip).
+        // The gunzip fallback in the response handler covers cases where
+        // OpenRouter still compresses despite this.
+        if (useOpenRouter) delete headers['accept-encoding'];
 
         const isMessagesEndpoint = req.url?.includes('/v1/messages');
         let isRequestStreaming = false;
@@ -212,13 +216,23 @@ export function startCredentialProxy(
               );
               body = Buffer.from(JSON.stringify(openaiJson), 'utf-8');
               headers['content-length'] = body.length;
-              logger.debug(
+
+              // Log context proof: model, message count, system prompt presence.
+              // This is the definitive record of what is sent to OpenRouter.
+              const msgCount = Array.isArray(anthropicJson.messages)
+                ? anthropicJson.messages.length
+                : 0;
+              const hasSystem = !!(anthropicJson.system || openaiJson.messages?.find((m: {role: string}) => m.role === 'system'));
+              logger.info(
                 {
-                  openrouterModel,
-                  isRequestStreaming,
+                  model: openrouterModel,
+                  messages: msgCount,
+                  hasSystem,
+                  streaming: isRequestStreaming,
                   hasReasoning: !!reasoningConfig,
+                  bodyBytes: body.length,
                 },
-                'OpenRouter: translated request to OpenAI format',
+                'OpenRouter: forwarding request',
               );
             } catch (err) {
               logger.warn(
@@ -252,8 +266,9 @@ export function startCredentialProxy(
         let upstreamPath = pathPrefix + (req.url ?? '/');
 
         if (useOpenRouter && isMessagesEndpoint) {
-          // Route to the OpenAI-compat endpoint; strip any query params too
-          upstreamPath = '/v1/chat/completions';
+          // Route to OpenRouter's OpenAI-compat endpoint.
+          // OpenRouter's API lives under /api, so the full path is /api/v1/chat/completions.
+          upstreamPath = '/api/v1/chat/completions';
         } else if (useOpenRouter && upstreamPath.includes('?beta=true')) {
           // Strip ?beta=true that the Claude Code SDK appends on other paths
           upstreamPath = upstreamPath.replace('?beta=true', '');
@@ -377,11 +392,15 @@ export function startCredentialProxy(
                 // Non-streaming: buffer, translate, re-send
                 const upChunks: Buffer[] = [];
                 upRes.on('data', (c: Buffer) => upChunks.push(c));
-                upRes.on('end', () => {
+                upRes.on('end', async () => {
                   try {
-                    const openaiBody = JSON.parse(
-                      Buffer.concat(upChunks).toString('utf-8'),
-                    );
+                    let rawBuf = Buffer.concat(upChunks);
+                    // Decompress gzip-encoded responses before parsing
+                    const contentEncoding = upRes.headers['content-encoding'];
+                    if (contentEncoding?.includes('gzip')) {
+                      rawBuf = await gunzipAsync(rawBuf);
+                    }
+                    const openaiBody = JSON.parse(rawBuf.toString('utf-8'));
                     const anthropicBody = translateResponseBody(openaiBody);
                     const translatedBuf = Buffer.from(
                       JSON.stringify(anthropicBody),

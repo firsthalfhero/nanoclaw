@@ -50,14 +50,21 @@ export function hostGatewayArgs(): string[] {
 }
 
 /**
- * CLI args that point the container's DNS at the host's dnsmasq so that
- * .home names (e.g. agilelife.home) resolve correctly inside agent containers.
- * Only needed on Linux where dnsmasq listens on the docker0 bridge IP.
+ * CLI args that point the container's DNS at dnsmasq so that .home names
+ * resolve correctly inside agent containers.
+ *
+ * On the hp-server.home unified network, dnsmasq is fixed at 172.21.0.3.
+ * On other networks (bridge, bridge-mode testing) we fall back to the
+ * docker0 bridge IP so the container at least gets the host resolver.
  */
-export function hostDnsArgs(): string[] {
+export function hostDnsArgs(containerNetwork?: string): string[] {
   if (os.platform() !== 'linux') return [];
-
   if (fs.existsSync('/proc/sys/fs/binfmt_misc/WSLInterop')) return [];
+
+  // hp-server.home unified network: dnsmasq is always at 172.21.0.3
+  if (containerNetwork && containerNetwork.includes('hp-server')) {
+    return ['--dns=172.21.0.3'];
+  }
 
   const ifaces = os.networkInterfaces();
   const docker0 = ifaces['docker0'];
