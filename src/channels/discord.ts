@@ -184,12 +184,12 @@ export class DiscordChannel implements Channel {
 
     const nutritionTodayCommand = new SlashCommandBuilder()
       .setName('nutrition-today')
-      .setDescription('Get today\'s nutrition summary')
+      .setDescription("Get today's nutrition summary")
       .toJSON();
 
     const nutritionWeekCommand = new SlashCommandBuilder()
       .setName('nutrition-week')
-      .setDescription('Get this week\'s nutrition summary')
+      .setDescription("Get this week's nutrition summary")
       .toJSON();
 
     // Register slash commands once bot is ready
@@ -201,13 +201,21 @@ export class DiscordChannel implements Channel {
       );
       console.log(`\n  Discord bot: ${readyClient.user.tag}`);
       console.log(`  Use /chatid to get a channel's registration ID`);
-      console.log(`  Use /log-meal, /nutrition-today, /nutrition-week for nutrition tracking\n`);
+      console.log(
+        `  Use /log-meal, /nutrition-today, /nutrition-week for nutrition tracking\n`,
+      );
 
       // Register commands globally
       try {
         const rest = new REST({ version: '10' }).setToken(this.botToken);
         await rest.put(Routes.applicationCommands(readyClient.user.id), {
-          body: [chatIdCommand, pingCommand, logMealCommand, nutritionTodayCommand, nutritionWeekCommand],
+          body: [
+            chatIdCommand,
+            pingCommand,
+            logMealCommand,
+            nutritionTodayCommand,
+            nutritionWeekCommand,
+          ],
         });
         logger.info('Discord slash commands registered');
       } catch (err) {
@@ -318,18 +326,22 @@ export class DiscordChannel implements Channel {
     const description = interaction.options.getString('description', true);
     const channel = interaction.channel;
 
-    if (!channel || !(
-      channel instanceof TextChannel ||
-      channel instanceof ThreadChannel ||
-      channel instanceof DMChannel
-    )) {
+    if (
+      !channel ||
+      !(
+        channel instanceof TextChannel ||
+        channel instanceof ThreadChannel ||
+        channel instanceof DMChannel
+      )
+    ) {
       await interaction.editReply('Error: Could not determine channel');
       return;
     }
 
     const jid = channelToJid(channel);
     const timestamp = new Date().toISOString();
-    const senderName = interaction.user.displayName || interaction.user.username || 'Unknown';
+    const senderName =
+      interaction.user.displayName || interaction.user.username || 'Unknown';
 
     try {
       // Send nutrition skill request through NanoClaw
@@ -343,10 +355,14 @@ export class DiscordChannel implements Channel {
         timestamp,
       });
 
-      await interaction.editReply(`📝 Logging meal: **${category}** - ${description}`);
+      await interaction.editReply(
+        `📝 Logging meal: **${category}** - ${description}`,
+      );
     } catch (err) {
       logger.error({ err }, 'Failed to handle log meal command');
-      await interaction.editReply('Error logging meal. Try asking in chat instead.');
+      await interaction.editReply(
+        'Error logging meal. Try asking in chat instead.',
+      );
     }
   }
 
@@ -356,18 +372,22 @@ export class DiscordChannel implements Channel {
     await interaction.deferReply();
 
     const channel = interaction.channel;
-    if (!channel || !(
-      channel instanceof TextChannel ||
-      channel instanceof ThreadChannel ||
-      channel instanceof DMChannel
-    )) {
+    if (
+      !channel ||
+      !(
+        channel instanceof TextChannel ||
+        channel instanceof ThreadChannel ||
+        channel instanceof DMChannel
+      )
+    ) {
       await interaction.editReply('Error: Could not determine channel');
       return;
     }
 
     const jid = channelToJid(channel);
     const timestamp = new Date().toISOString();
-    const senderName = interaction.user.displayName || interaction.user.username || 'Unknown';
+    const senderName =
+      interaction.user.displayName || interaction.user.username || 'Unknown';
 
     try {
       // Send nutrition summary request
@@ -380,10 +400,12 @@ export class DiscordChannel implements Channel {
         timestamp,
       });
 
-      await interaction.editReply('📊 Fetching today\'s nutrition summary...');
+      await interaction.editReply("📊 Fetching today's nutrition summary...");
     } catch (err) {
       logger.error({ err }, 'Failed to handle nutrition today command');
-      await interaction.editReply('Error fetching nutrition summary. Try asking in chat instead.');
+      await interaction.editReply(
+        'Error fetching nutrition summary. Try asking in chat instead.',
+      );
     }
   }
 
@@ -393,18 +415,22 @@ export class DiscordChannel implements Channel {
     await interaction.deferReply();
 
     const channel = interaction.channel;
-    if (!channel || !(
-      channel instanceof TextChannel ||
-      channel instanceof ThreadChannel ||
-      channel instanceof DMChannel
-    )) {
+    if (
+      !channel ||
+      !(
+        channel instanceof TextChannel ||
+        channel instanceof ThreadChannel ||
+        channel instanceof DMChannel
+      )
+    ) {
       await interaction.editReply('Error: Could not determine channel');
       return;
     }
 
     const jid = channelToJid(channel);
     const timestamp = new Date().toISOString();
-    const senderName = interaction.user.displayName || interaction.user.username || 'Unknown';
+    const senderName =
+      interaction.user.displayName || interaction.user.username || 'Unknown';
 
     try {
       // Send nutrition summary request
@@ -417,10 +443,14 @@ export class DiscordChannel implements Channel {
         timestamp,
       });
 
-      await interaction.editReply('📊 Fetching this week\'s nutrition summary...');
+      await interaction.editReply(
+        "📊 Fetching this week's nutrition summary...",
+      );
     } catch (err) {
       logger.error({ err }, 'Failed to handle nutrition week command');
-      await interaction.editReply('Error fetching nutrition summary. Try asking in chat instead.');
+      await interaction.editReply(
+        'Error fetching nutrition summary. Try asking in chat instead.',
+      );
     }
   }
 

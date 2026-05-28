@@ -80,6 +80,15 @@ For group management (registering/removing/listing groups, sender allowlists, ad
 
 For global memory shared across all groups, read/write `/workspace/project/groups/global/CLAUDE.md`. Only update it when explicitly asked to "remember this globally".
 
+## Scheduled Tasks
+
+At the start of each conversation, you receive a "Scheduled Tasks Status" summary that shows:
+- Number of overdue, upcoming, and paused tasks
+- Next run times for each task
+- Last result/completion status
+
+When asked about scheduled tasks ("What do I have scheduled?", "Do I have any tasks?", etc.), refer to this status summary that's provided at the beginning of your context. You don't need to query the database — the information is already there.
+
 ## Token Usage
 
 When asked about token usage, run this query and format the results:

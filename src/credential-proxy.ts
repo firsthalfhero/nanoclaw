@@ -350,10 +350,16 @@ export function startCredentialProxy(
 
     server.on('error', (err: any) => {
       if (err.code === 'EADDRINUSE') {
-        logger.error({ port, err }, 'Port already in use, retrying in 2 seconds...');
+        logger.error(
+          { port, err },
+          'Port already in use, retrying in 2 seconds...',
+        );
         setTimeout(() => {
           server.listen(port, host, () => {
-            logger.info({ port, host, authMode }, 'Credential proxy started (retry)');
+            logger.info(
+              { port, host, authMode },
+              'Credential proxy started (retry)',
+            );
             resolve(server);
           });
         }, 2000);

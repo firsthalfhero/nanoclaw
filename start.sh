@@ -21,8 +21,31 @@ case "$CMD" in
     cd "$ROOT"
     echo "Building..."
     npm run build > /dev/null 2>&1 && echo "✓ Built" || { echo "❌ Build failed"; exit 1; }
+
+    echo "Clearing in-memory cache (killing processes)..."
+    pkill -f "node.*nanoclaw/dist" 2>/dev/null || true
+    sleep 2
+
+    echo "Stopping systemd service..."
+    sudo systemctl stop "$SERVICE" 2>/dev/null || true
+    sleep 2
+
+    echo "Starting systemd service..."
     sudo systemctl start "$SERVICE"
-    echo "✓ Started"
+    sleep 3
+
+    echo "Checking for multiple processes..."
+    PIDS=$(pgrep -f "node.*nanoclaw/dist" | wc -l)
+    if [ "$PIDS" -gt 1 ]; then
+      echo "Found $PIDS processes, killing extras and restarting..."
+      pkill -f "node.*nanoclaw/dist" 2>/dev/null || true
+      sleep 2
+      sudo systemctl start "$SERVICE"
+      sleep 3
+    fi
+
+    FINAL_PID=$(pgrep -f "node.*nanoclaw/dist" | head -1)
+    echo "✓ Started (PID: $FINAL_PID)"
     ;;
   stop|--stop|-stop)
     sudo systemctl stop "$SERVICE"
